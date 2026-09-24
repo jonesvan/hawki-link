@@ -51,13 +51,39 @@ function baseDescribe(name, result) {
       if (result.opened_new_tab) return { ok: true, text: `Opened new tab: ${view?.url || ""}`, navigated: true, ...view };
       if (result.navigated) return { ok: true, text: `Clicked \u2192 navigated to ${view?.url || ""}`, navigated: true, ...view };
       return { ok: true, text: `Clicked ${result.clicked || "element"}`, ...view };
+    case "dblclick":
+      if (result.navigated) return { ok: true, text: `Double-clicked \u2192 navigated`, navigated: true, ...view };
+      return { ok: true, text: `Double-clicked ${result.doubleClicked || "element"}` };
+    case "right_click":
+      return { ok: true, text: `Right-clicked ${result.rightClicked || "element"}` };
+    case "hover":
+      return { ok: true, text: `Hovered ${result.hovered || "element"}` };
+    case "check":
+      return { ok: true, text: `${result.checked ? "Checked" : "Unchecked"} ${result.text || "element"}` };
+    case "focus":
+      return { ok: true, text: `Focused ${result.focused || "element"}` };
+    case "read":
+      return {
+        ok: true,
+        text: `Read <${result.tag}>: ${(result.text || "").slice(0, 300)}` +
+          (result.value != null ? ` [value=${String(result.value).slice(0, 120)}]` : ""),
+        preview: result.text ? result.text.slice(0, 220) : undefined
+      };
+    case "scroll_into_view":
+      return { ok: true, text: "Scrolled element into view." };
+    case "drag":
+      return { ok: true, text: `Dragged ${result.dragged || "source"} \u2192 ${result.to || "target"}` };
+    case "evaluate":
+      return { ok: true, text: `JS returned: ${JSON.stringify(result.value).slice(0, 500)}` };
+    case "wait_for":
+      return { ok: true, text: result.matched ? `Condition met (${result.count ?? "ok"}).` : "Wait finished." };
     case "type_text":
       if (result.navigated) return { ok: true, text: `Submitted \u2192 navigated to ${view?.url || ""}`, navigated: true, ...view };
       return { ok: true, text: `Typed ${result.typed || "text"}`, ...view };
     case "select_option":
       return { ok: true, text: `Selected "${result.selected || ""}"`, ...view };
     case "press_key":
-      return { ok: true, text: "Pressed key", ...view };
+      return { ok: true, text: `Pressed ${result?.pressed || "key"}`, ...view };
     case "scroll":
       return { ok: true, text: `Scrolled (y=${result.scrollY ?? "?"})` };
     case "wait":
@@ -221,14 +247,44 @@ export class Agent {
         case "click":
           result = await this.browser.click(args.id);
           break;
+        case "dblclick":
+          result = await this.browser.dblclick(args.id);
+          break;
+        case "right_click":
+          result = await this.browser.rightClick(args.id);
+          break;
+        case "hover":
+          result = await this.browser.hover(args.id);
+          break;
         case "type_text":
           result = await this.browser.typeText(args.id, args.text, args.submit);
           break;
         case "select_option":
           result = await this.browser.selectOption(args.id, args.value);
           break;
+        case "check":
+          result = await this.browser.check(args.id, args.checked);
+          break;
+        case "focus":
+          result = await this.browser.focus(args.id);
+          break;
+        case "read":
+          result = await this.browser.read(args.id);
+          break;
+        case "scroll_into_view":
+          result = await this.browser.scrollIntoView(args.id);
+          break;
         case "press_key":
-          result = await this.browser.pressKey(args.key);
+          result = await this.browser.pressKey(args.keys || args.key);
+          break;
+        case "drag":
+          result = await this.browser.drag(args.from_id, args.to_id);
+          break;
+        case "evaluate":
+          result = await this.browser.evaluate(args.code);
+          break;
+        case "wait_for":
+          result = await this.browser.waitFor(args.type, args.value, args.timeout_ms);
           break;
         case "scroll":
           result = await this.browser.scroll(args.direction, args.amount);

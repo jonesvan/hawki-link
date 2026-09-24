@@ -287,10 +287,12 @@ async function observe(tabIdRef, opts = {}) {
 
 // Run an action in the frame that owns the target element, detect navigation /
 // new tabs, and return the resulting page state.
-async function runAction(tabIdRef, action, args, lastFrameRef) {
+async function runAction(tabIdRef, action, args, lastFrameRef, opts = {}) {
   const before = await tabStatus(tabIdRef.current);
-  const watcher = watchNewTab(450);
-  const frameId = frameOfId(args && args.id) ?? (lastFrameRef ? lastFrameRef.current : 0);
+  const watch = opts.watch !== false;
+  const watcher = watch ? watchNewTab(450) : Promise.resolve(null);
+  const idForFrame = (args && (args.id || args.from_id)) || null;
+  const frameId = frameOfId(idForFrame) ?? (lastFrameRef ? lastFrameRef.current : 0);
   if (lastFrameRef && frameId != null) lastFrameRef.current = frameId;
 
   let result;
@@ -306,6 +308,11 @@ async function runAction(tabIdRef, action, args, lastFrameRef) {
     tabIdRef.current = created.id;
     const page = await observe(tabIdRef);
     return attachDialogs({ ok: true, action, opened_new_tab: true, page });
+  }
+
+  if (!watch) {
+    if (error) throw error;
+    return attachDialogs({ ok: true, action, ...(result || {}) });
   }
 
   await sleep(120);
@@ -360,6 +367,18 @@ function makeBrowser(tabIdRef) {
       return await runAction(tabIdRef, "click", { id }, lastFrameRef);
     },
 
+    async dblclick(id) {
+      return await runAction(tabIdRef, "dblclick", { id }, lastFrameRef);
+    },
+
+    async rightClick(id) {
+      return await runAction(tabIdRef, "rightClick", { id }, lastFrameRef);
+    },
+
+    async hover(id) {
+      return await runAction(tabIdRef, "hover", { id }, lastFrameRef, { watch: false });
+    },
+
     async typeText(id, text, submit) {
       return await runAction(tabIdRef, "type", { id, text, submit: !!submit }, lastFrameRef);
     },
@@ -368,8 +387,85 @@ function makeBrowser(tabIdRef) {
       return await runAction(tabIdRef, "select", { id, value }, lastFrameRef);
     },
 
-    async pressKey(key) {
-      return await runAction(tabIdRef, "pressKey", { key }, lastFrameRef);
+    async check(id, checked) {
+      return await runAction(tabIdRef, "check", { id, checked }, lastFrameRef);
+    },
+
+    async focus(id) {
+      return await runAction(tabIdRef, "focus", { id }, lastFrameRef, { watch: false });
+    },
+
+    async read(id) {
+      return await runAction(tabIdRef, "read", { id }, lastFrameRef, { watch: false });
+    },
+
+    async scrollIntoView(id) {
+      return await runAction(tabIdRef, "scrollIntoView", { id }, lastFrameRef, { watch: false });
+    },
+
+    async pressKey(keys) {
+      return await runAction(tabIdRef, "pressKey", { keys }, lastFrameRef);
+    },
+
+    async drag(fromId, toId) {
+      return await runAction(
+        tabIdRef,
+        "drag",
+        { from_id: fromId, to_id: toId },
+        lastFrameRef
+      );
+    },
+
+    async evaluate(code) {
+      const tabId = activeTabId();
+      let results;
+      try {
+        results = await chrome.scripting.executeScript({
+          target: { tabId, frameId: lastFrameRef.current || 0 },
+          world: "MAIN",
+          func: (src) => {
+            try {
+              const value = (0, eval)(src);
+              let safe;
+              try {
+                safe = JSON.parse(JSON.stringify(value ?? null));
+              } catch (_) {
+                safe = String(value);
+              }
+              return { ok: true, value: safe };
+            } catch (err) {
+              return { ok: false, error: String((err && err.message) || err) };
+            }
+          },
+          args: [String(code)]
+        });
+      } catch (err) {
+        return attachDialogs({ ok: false, error: "evaluate failed: " + err.message });
+      }
+      const r = results && results[0] && results[0].result;
+      return attachDialogs(r || { ok: false, error: "evaluate returned no result." });
+    },
+
+    async waitFor(type, value, timeoutMs) {
+      const deadline = Date.now() + Math.min(Math.max(Number(timeoutMs) || 10000, 500), 30000);
+      const tabId = activeTabId();
+      while (Date.now() < deadline) {
+        if (type === "url") {
+          const t = await tabStatus(tabId);
+          if (t && t.url && t.url.includes(value)) return { ok: true, matched: true, url: t.url };
+        } else if (type === "selector") {
+          const frameIds = await injectIntoFrames(tabId);
+          for (const frameId of frameIds) {
+            const r = await sendToFrame(tabId, frameId, "query", { selector: value }).catch(() => null);
+            if (r && r.ok && r.count > 0) return { ok: true, matched: true, count: r.count };
+          }
+        } else {
+          const snap = await snapshotAll(tabId, { maxChars: 8000, maxElements: 1 }).catch(() => null);
+          if (snap && snap.text && snap.text.includes(value)) return { ok: true, matched: true };
+        }
+        await sleep(250);
+      }
+      return { ok: false, error: `Timed out waiting for ${type} "${value}".` };
     },
 
     async scroll(direction, amount) {

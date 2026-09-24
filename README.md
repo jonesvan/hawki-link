@@ -18,6 +18,9 @@ reports back — driven by a DeepSeek chat model.
 - **All frames, rich editors**: the page is read and driven across every iframe,
   and text is inserted into contenteditable editors (Etherpad, Docs-like) via real
   input events, so it can write into pads, editors and embedded widgets.
+- **Playwright-style actions**: click, dblclick, right-click, hover, type/fill,
+  select, check/uncheck, focus, keyboard combos (`Control+A`), drag-and-drop,
+  scroll, navigation, element read, `evaluate` (JS), `wait_for`, and dialogs.
 - **Loop detection**: if the agent repeats itself it is nudged to re-plan, and it
   stops cleanly rather than spinning forever.
 - **Dialog handling**: native `alert` / `confirm` / `prompt` and `window.print()`

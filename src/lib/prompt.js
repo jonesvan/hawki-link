@@ -18,7 +18,9 @@ possible: make decisions yourself, never wait for or request user input.
 ## The loop
 1. Call \`get_page_state\` (or read the returned \`page\`) to see the current page: URL, title,
    text, and a numbered list of interactive elements.
-2. Take action (click, type_text, select_option, press_key, scroll, navigate).
+2. Take action. Available actions: click, dblclick, right_click, hover, type_text,
+   select_option, check, focus, press_key (incl. combos like Control+A), drag,
+   scroll, scroll_into_view, navigate, read, evaluate, wait, wait_for.
 3. Actions that change the page return a fresh \`page\` observation. Verify and continue.
 4. Complete EVERY stage of multi-step goals (search -> open -> read -> report; or
    add to cart -> check out -> confirm).
@@ -124,6 +126,109 @@ export const TOOLS = [
   {
     type: "function",
     function: {
+      name: "hover",
+      description: "Move the pointer over an element (reveals menus, tooltips, hover-only actions).",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "dblclick",
+      description: "Double-click an element (e.g. edit-in-place, select word).",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "right_click",
+      description: "Right-click an element to open its context menu.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "check",
+      description: "Check or uncheck a checkbox or radio button by id.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          checked: { type: "boolean", description: "true to check (default), false to uncheck." }
+        },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "focus",
+      description: "Focus an element (input, button, link) without clicking it.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read",
+      description:
+        "Read one element's text, value, checked state and key attributes by id. Use for precise values instead of guessing from the snapshot.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "scroll_into_view",
+      description: "Scroll an element into the middle of the viewport.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "drag",
+      description: "Drag one element onto another (sliders, sortable lists, kanban boards, drag-and-drop).",
+      parameters: {
+        type: "object",
+        properties: {
+          from_id: { type: "string" },
+          to_id: { type: "string" }
+        },
+        required: ["from_id", "to_id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "select_option",
       description:
         "Choose an option in a <select> dropdown identified by id. Matches by option value or visible text.",
@@ -141,11 +246,44 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "press_key",
-      description: "Press a keyboard key such as Enter, Tab, Escape, or ArrowDown.",
+      description:
+        "Press a key or key combination, e.g. \"Enter\", \"Tab\", \"Escape\", \"ArrowDown\", \"Control+A\", \"Shift+Enter\".",
       parameters: {
         type: "object",
-        properties: { key: { type: "string" } },
-        required: ["key"]
+        properties: { keys: { type: "string", description: "Key or combo, e.g. Control+A." } },
+        required: ["keys"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "evaluate",
+      description:
+        "Run a JavaScript expression in the page and return its JSON value. Powerful fallback for anything the other tools cannot do. Subject to the page's CSP.",
+      parameters: {
+        type: "object",
+        properties: {
+          code: { type: "string", description: "A JS expression, e.g. document.title." }
+        },
+        required: ["code"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "wait_for",
+      description:
+        "Wait until a condition is true, instead of blindly waiting. type is 'text', 'selector', or 'url'; value is what to wait for.",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["text", "selector", "url"] },
+          value: { type: "string" },
+          timeout_ms: { type: "integer", description: "Max wait in ms (default 10000)." }
+        },
+        required: ["type", "value"]
       }
     }
   },

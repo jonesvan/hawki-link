@@ -250,16 +250,196 @@
     return { ok: true, selected: option.textContent.trim() };
   }
 
-  async function doPressKey(key) {
+  function parseCombo(combo) {
+    const parts = String(combo || "")
+      .split("+")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const key = parts.pop() || "";
+    const mods = { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false };
+    for (const p of parts) {
+      const l = p.toLowerCase();
+      if (l === "ctrl" || l === "control") mods.ctrlKey = true;
+      else if (l === "shift") mods.shiftKey = true;
+      else if (l === "alt" || l === "option") mods.altKey = true;
+      else if (l === "meta" || l === "cmd" || l === "command") mods.metaKey = true;
+    }
+    return { key, mods };
+  }
+
+  async function doPressKey(combo) {
     const target = document.activeElement || document.body;
-    const opts = { key, code: key, bubbles: true, cancelable: true };
+    const { key, mods } = parseCombo(combo);
+    const opts = { key, code: key, bubbles: true, cancelable: true, ...mods };
     target.dispatchEvent(new KeyboardEvent("keydown", opts));
-    target.dispatchEvent(new KeyboardEvent("keypress", opts));
+    if (key.length === 1 || key === "Enter") {
+      target.dispatchEvent(new KeyboardEvent("keypress", opts));
+    }
     target.dispatchEvent(new KeyboardEvent("keyup", opts));
-    if (key === "Enter" && target.form && typeof target.form.requestSubmit === "function") {
+
+    // Common shortcuts that need an explicit implementation.
+    if ((mods.ctrlKey || mods.metaKey) && key.toLowerCase() === "a") {
+      try {
+        document.execCommand("selectAll");
+      } catch (_) {}
+    } else if (key === "Enter" && target.form && typeof target.form.requestSubmit === "function") {
       target.form.requestSubmit();
     }
+    return { ok: true, pressed: combo };
+  }
+
+  function mouseCenter(el) {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
+  function fireMouse(el, type, x, y, extra = {}) {
+    el.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        ...extra
+      })
+    );
+  }
+
+  function doHover(id) {
+    const el = byId(id);
+    if (!el) return { ok: false, error: `No element with id ${id}` };
+    el.scrollIntoView({ block: "center", behavior: "instant" });
+    highlight(el);
+    const { x, y } = mouseCenter(el);
+    for (const t of ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]) {
+      fireMouse(el, t, x, y);
+    }
+    return { ok: true, hovered: labelFor(el) };
+  }
+
+  function doDblclick(id) {
+    const el = byId(id);
+    if (!el) return { ok: false, error: `No element with id ${id}` };
+    el.scrollIntoView({ block: "center", behavior: "instant" });
+    highlight(el);
+    const { x, y } = mouseCenter(el);
+    fireMouse(el, "mousedown", x, y, { detail: 1 });
+    fireMouse(el, "mouseup", x, y, { detail: 1 });
+    fireMouse(el, "click", x, y, { detail: 1 });
+    fireMouse(el, "mousedown", x, y, { detail: 2 });
+    fireMouse(el, "mouseup", x, y, { detail: 2 });
+    fireMouse(el, "click", x, y, { detail: 2 });
+    fireMouse(el, "dblclick", x, y, { detail: 2 });
+    return { ok: true, doubleClicked: labelFor(el) };
+  }
+
+  function doRightClick(id) {
+    const el = byId(id);
+    if (!el) return { ok: false, error: `No element with id ${id}` };
+    el.scrollIntoView({ block: "center", behavior: "instant" });
+    highlight(el);
+    const { x, y } = mouseCenter(el);
+    fireMouse(el, "mousedown", x, y, { button: 2, buttons: 2 });
+    fireMouse(el, "mouseup", x, y, { button: 2, buttons: 0 });
+    fireMouse(el, "contextmenu", x, y, { button: 2 });
+    return { ok: true, rightClicked: labelFor(el) };
+  }
+
+  function doCheck(id, checked) {
+    const el = byId(id);
+    if (!el) return { ok: false, error: `No element with id ${id}` };
+    el.scrollIntoView({ block: "center", behavior: "instant" });
+    highlight(el);
+    const want = checked !== false;
+    if (typeof el.checked === "boolean" && el.checked !== want) {
+      el.click();
+    }
+    if (typeof el.checked === "boolean") el.checked = want;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, checked: !!el.checked, text: labelFor(el) };
+  }
+
+  function doFocus(id) {
+    const el = byId(id);
+    if (!el) return { ok: false, error: `No element with id ${id}` };
+    el.scrollIntoView({ block: "center", behavior: "instant" });
+    el.focus({ preventScroll: true });
+    el.dispatchEvent(new FocusEvent("focus", { bubbles: false }));
+    el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    return { ok: true, focused: labelFor(el) };
+  }
+
+  function doScrollIntoView(id) {
+    const el = byId(id);
+    if (!el) return { ok: false, error: `No element with id ${id}` };
+    el.scrollIntoView({ block: "center", behavior: "instant" });
     return { ok: true };
+  }
+
+  function doDrag(fromId, toId) {
+    const from = byId(fromId);
+    const to = byId(toId);
+    if (!from) return { ok: false, error: `No source element with id ${fromId}` };
+    if (!to) return { ok: false, error: `No target element with id ${toId}` };
+    from.scrollIntoView({ block: "center", behavior: "instant" });
+    const a = mouseCenter(from);
+    const b = mouseCenter(to);
+    const dataTransfer = (() => {
+      try {
+        return new DataTransfer();
+      } catch (_) {
+        return null;
+      }
+    })();
+
+    // HTML5 drag events (for apps built on the drag-and-drop API).
+    const dragEvt = (type, target, coords) => {
+      const ev = new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: coords.x,
+        clientY: coords.y,
+        dataTransfer
+      });
+      target.dispatchEvent(ev);
+    };
+    dragEvt("dragstart", from, a);
+    dragEvt("dragenter", to, b);
+    dragEvt("dragover", to, b);
+    dragEvt("drop", to, b);
+    dragEvt("dragend", from, b);
+
+    // Pointer/mouse sequence (for canvas/JS-driven drag).
+    fireMouse(from, "mousedown", a.x, a.y, { buttons: 1 });
+    for (let i = 1; i <= 5; i++) {
+      const x = a.x + ((b.x - a.x) * i) / 5;
+      const y = a.y + ((b.y - a.y) * i) / 5;
+      fireMouse(document.elementFromPoint(x, y) || to, "mousemove", x, y, { buttons: 1 });
+    }
+    fireMouse(to, "mouseup", b.x, b.y, { buttons: 0 });
+    return { ok: true, dragged: labelFor(from), to: labelFor(to) };
+  }
+
+  function doRead(id) {
+    const el = byId(id);
+    if (!el) return { ok: false, error: `No element with id ${id}` };
+    const attrs = {};
+    for (const name of ["href", "src", "name", "type", "placeholder", "role", "value"]) {
+      const v = el.getAttribute && el.getAttribute(name);
+      if (v != null) attrs[name] = String(v).slice(0, 300);
+    }
+    return {
+      ok: true,
+      tag: el.tagName.toLowerCase(),
+      text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 2000),
+      value: "value" in el ? String(el.value ?? "").slice(0, 500) : undefined,
+      checked: typeof el.checked === "boolean" ? el.checked : undefined,
+      disabled: !!el.disabled,
+      attributes: attrs
+    };
   }
 
   function doScroll(direction, amount) {
@@ -283,11 +463,19 @@
   window.__hawkiAgent = {
     snapshot,
     click: doClick,
+    dblclick: doDblclick,
+    rightClick: doRightClick,
+    hover: doHover,
     type: doType,
     select: doSelect,
+    check: doCheck,
+    focus: doFocus,
     pressKey: doPressKey,
+    drag: doDrag,
+    read: doRead,
+    scrollIntoView: doScrollIntoView,
     scroll: doScroll,
-    version: 1
+    version: 2
   };
 
   // Signal readiness to the background worker (used only for the first inject).
@@ -326,18 +514,55 @@
           case "click":
             result = api.click(msg.args.id);
             break;
+          case "dblclick":
+            result = api.dblclick(msg.args.id);
+            break;
+          case "rightClick":
+            result = api.rightClick(msg.args.id);
+            break;
+          case "hover":
+            result = api.hover(msg.args.id);
+            break;
           case "type":
             result = await api.type(msg.args.id, msg.args.text, msg.args.submit);
             break;
           case "select":
             result = api.select(msg.args.id, msg.args.value);
             break;
+          case "check":
+            result = api.check(msg.args.id, msg.args.checked);
+            break;
+          case "focus":
+            result = api.focus(msg.args.id);
+            break;
           case "pressKey":
-            result = await api.pressKey(msg.args.key);
+            result = await api.pressKey(msg.args.keys || msg.args.key);
+            break;
+          case "drag":
+            result = api.drag(msg.args.from_id, msg.args.to_id);
+            break;
+          case "read":
+            result = api.read(msg.args.id);
+            break;
+          case "scrollIntoView":
+            result = api.scrollIntoView(msg.args.id);
             break;
           case "scroll":
             result = api.scroll(msg.args.direction, msg.args.amount);
             break;
+          case "query": {
+            try {
+              const els = Array.from(document.querySelectorAll(msg.args.selector));
+              result = {
+                ok: true,
+                count: els.length,
+                text: els[0] ? (els[0].innerText || els[0].textContent || "").trim().slice(0, 300) : ""
+              };
+            } catch (err) {
+              result = { ok: false, error: String(err.message || err) };
+            }
+            break;
+          }
           default:
             result = { ok: false, error: "Unknown action: " + msg.action };
         }
