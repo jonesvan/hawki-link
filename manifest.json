@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Hawki Link",
+  "version": "0.1.0",
+  "description": "An autonomous browsing agent: read pages, log in, shop, search Google Scholar and more \u2014 powered by DeepSeek.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "activeTab",
+    "offscreen"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Hawki Link",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "src/options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/content.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

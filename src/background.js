@@ -1,0 +1,284 @@
+// Background service worker: wires the agent loop to Chrome's tab APIs and
+// relays events to the popup UI.
+
+import { Agent } from "./lib/agent.js";
+import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./lib/deepseek.js";
+
+const DEFAULT_SETTINGS = {
+  apiKey: "",
+  baseUrl: DEFAULT_BASE_URL,
+  model: DEFAULT_MODEL,
+  temperature: 0.2,
+  maxSteps: 25
+};
+
+let session = null; // { agent, pendingAsk, tabId, running }
+const eventHistory = []; // recent events, replayed when the popup reopens
+const HISTORY_LIMIT = 300;
+
+function emit(event) {
+  eventHistory.push(event);
+  if (eventHistory.length > HISTORY_LIMIT) eventHistory.shift();
+  // Fire-and-forget; the popup may not be open.
+  chrome.runtime.sendMessage({ type: "hawki:event", event }).catch(() => {});
+}
+
+async function loadSettings() {
+  const stored = await chrome.storage.local.get("settings");
+  return { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
+}
+
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || tab.id == null) throw new Error("No active tab found.");
+  return tab;
+}
+
+// Keep the service worker alive during a run via an offscreen document.
+const OFFSCREEN_PATH = "src/offscreen.html";
+async function ensureKeepalive() {
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"]
+  });
+  if (contexts.length) return;
+  await chrome.offscreen.createDocument({
+    url: OFFSCREEN_PATH,
+    reasons: ["WORKERS"],
+    justification: "Keep the agent task running while it controls the browser."
+  });
+}
+async function releaseKeepalive() {
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"]
+  });
+  if (contexts.length) await chrome.offscreen.closeDocument();
+}
+
+async function ensureContent(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      source: "hawki-agent",
+      action: "snapshot",
+      args: { maxElements: 1, maxChars: 1 }
+    });
+    return;
+  } catch (_) {
+    // Not injected yet.
+  }
+  await chrome.scripting.insertCSS({
+    target: { tabId },
+    files: ["src/content.css"]
+  }).catch(() => {});
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["src/content.js"]
+  });
+}
+
+async function sendAction(tabId, action, args = {}) {
+  await ensureContent(tabId);
+  const res = await chrome.tabs.sendMessage(tabId, {
+    source: "hawki-agent",
+    action,
+    args
+  });
+  if (!res) throw new Error("No response from page.");
+  if (!res.ok) throw new Error(res.error || "Page action failed.");
+  return res.result;
+}
+
+function waitForTabComplete(tabId, timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timer);
+      resolve();
+    };
+    const listener = (id, info) => {
+      if (id === tabId && info.status === "complete") finish();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    const timer = setTimeout(finish, timeoutMs);
+    // Resolve quickly if already complete.
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab && tab.status === "complete") setTimeout(finish, 300);
+    }).catch(() => {});
+  });
+}
+
+function makeBrowser(tabIdRef) {
+  const activeTabId = () => tabIdRef.current;
+
+  return {
+    async getPageState(args = {}) {
+      const state = await sendAction(activeTabId(), "snapshot", {
+        maxChars: args.max_chars || 6000,
+        maxElements: 120
+      });
+      return state;
+    },
+
+    async navigate(args = {}) {
+      const target = String(args.url || "").trim();
+      const id = activeTabId();
+      if (/^(back|forward|reload)$/i.test(target)) {
+        const v = target.toLowerCase();
+        if (v === "back") await chrome.tabs.goBack(id).catch(() => {});
+        else if (v === "forward") await chrome.tabs.goForward(id).catch(() => {});
+        else await chrome.tabs.reload(id);
+      } else if (args.new_tab) {
+        const tab = await chrome.tabs.create({ url: target });
+        tabIdRef.current = tab.id;
+      } else {
+        let url = target;
+        if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+        await chrome.tabs.update(id, { url });
+      }
+      await waitForTabComplete(tabIdRef.current);
+      return { ok: true, url: (await chrome.tabs.get(tabIdRef.current)).url };
+    },
+
+    async click(id) {
+      return await sendAction(activeTabId(), "click", { id });
+    },
+
+    async typeText(id, text, submit) {
+      return await sendAction(activeTabId(), "type", { id, text, submit: !!submit });
+    },
+
+    async selectOption(id, value) {
+      return await sendAction(activeTabId(), "select", { id, value });
+    },
+
+    async pressKey(key) {
+      return await sendAction(activeTabId(), "pressKey", { key });
+    },
+
+    async scroll(direction, amount) {
+      return await sendAction(activeTabId(), "scroll", { direction, amount });
+    },
+
+    async wait(ms) {
+      const capped = Math.min(Math.max(Number(ms) || 1000, 100), 10000);
+      await new Promise((r) => setTimeout(r, capped));
+      return { ok: true, waited: capped };
+    }
+  };
+}
+
+async function startSession(goal) {
+  if (session && session.running) {
+    throw new Error("An agent task is already running.");
+  }
+  const settings = await loadSettings();
+  const tab = await getActiveTab();
+  const tabIdRef = { current: tab.id };
+
+  const agent = new Agent({
+    settings,
+    browser: makeBrowser(tabIdRef),
+    onLog: (entry) => emit({ kind: "log", ...entry }),
+    onAsk: (question) => {
+      emit({ kind: "ask", question });
+      return new Promise((resolve) => {
+        session.pendingAsk = resolve;
+      });
+    },
+    onFinish: (summary) => {
+      emit({ kind: "finish", summary });
+      if (session) session.running = false;
+      releaseKeepalive().catch(() => {});
+    }
+  });
+
+  session = { agent, pendingAsk: null, tabId: tab.id, running: true };
+  eventHistory.length = 0;
+  try {
+    await ensureKeepalive();
+  } catch (_) {
+    // Not fatal: the task can still run, it may just be interrupted sooner.
+  }
+  emit({ kind: "start", goal, tabId: tab.id });
+
+  agent.run(goal).catch((err) => {
+    emit({ kind: "finish", summary: "Agent crashed: " + err.message });
+    if (session) session.running = false;
+    releaseKeepalive().catch(() => {});
+  });
+}
+
+function stopSession() {
+  if (!session) return { ok: false, error: "No task running." };
+  if (session.pendingAsk) {
+    const resolve = session.pendingAsk;
+    session.pendingAsk = null;
+    resolve("[The user stopped the task.]");
+  }
+  session.agent.stop("Stopped by user.");
+  session.running = false;
+  emit({ kind: "finish", summary: "Stopped by user." });
+  releaseKeepalive().catch(() => {});
+  return { ok: true };
+}
+
+function replyToAsk(text) {
+  if (!session || !session.pendingAsk) {
+    return { ok: false, error: "The agent is not waiting for input." };
+  }
+  const resolve = session.pendingAsk;
+  session.pendingAsk = null;
+  emit({ kind: "user-reply", text });
+  resolve(text);
+  return { ok: true };
+}
+
+function sessionState() {
+  return {
+    running: !!(session && session.running),
+    waiting: !!(session && session.pendingAsk),
+    history: eventHistory
+  };
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg) return false;
+
+  if (msg.type === "hawki:content-ready") {
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (msg.type === "hawki:start") {
+    startSession(msg.goal)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "hawki:stop") {
+    sendResponse(stopSession());
+    return false;
+  }
+
+  if (msg.type === "hawki:user-reply") {
+    sendResponse(replyToAsk(msg.text));
+    return false;
+  }
+
+  if (msg.type === "hawki:get-state") {
+    sendResponse(sessionState());
+    return false;
+  }
+
+  return false;
+});
+
+// Open the options page on first install so the user can add an API key.
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason === "install") {
+    chrome.runtime.openOptionsPage();
+  }
+});

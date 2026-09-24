@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hawki Link - Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="logo">H</span>
+        <div>
+          <h1>Hawki Link</h1>
+          <p class="muted">Autonomous web agent settings</p>
+        </div>
+      </header>
+
+      <section>
+        <h2>Model provider</h2>
+        <label>
+          DeepSeek API key
+          <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" />
+        </label>
+        <p class="hint">
+          Stored locally in this browser only (chrome.storage.local). Never sent
+          anywhere except your configured API endpoint.
+        </p>
+        <label>
+          Base URL
+          <input id="baseUrl" type="text" placeholder="https://api.deepseek.com" />
+        </label>
+        <label>
+          Model
+          <input id="model" type="text" list="models" placeholder="deepseek-chat" />
+          <datalist id="models">
+            <option value="deepseek-chat"></option>
+            <option value="deepseek-reasoner"></option>
+          </datalist>
+        </label>
+      </section>
+
+      <section>
+        <h2>Agent behaviour</h2>
+        <div class="row">
+          <label>
+            Max steps
+            <input id="maxSteps" type="number" min="1" max="100" />
+          </label>
+          <label>
+            Temperature
+            <input id="temperature" type="number" min="0" max="2" step="0.1" />
+          </label>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="save" class="primary">Save</button>
+        <button id="test" class="ghost">Test connection</button>
+        <span id="status" class="status"></span>
+      </div>
+
+      <section class="warning">
+        <h2>Security notes</h2>
+        <ul>
+          <li>
+            The agent can read page content and interact with sites you are logged
+            into. Only run tasks you trust.
+          </li>
+          <li>
+            It will ask before spending money, sending messages, or deleting data.
+          </li>
+          <li>
+            Passwords you provide via the agent are typed into the page and are not
+            stored by Hawki Link.
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <script src="options.js" type="module"></script>
+  </body>
+</html>

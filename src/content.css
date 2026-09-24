@@ -1,0 +1,9 @@
+/* Visual affordances injected by Hawki Link while the agent is running. */
+[data-hawki-id] {
+  --hawki-outline: 2px dashed rgba(255, 87, 34, 0.55);
+}
+
+html.hawki-active [data-hawki-id]:hover {
+  outline: var(--hawki-outline);
+  outline-offset: 1px;
+}

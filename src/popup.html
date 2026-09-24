@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hawki Link</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">H</span>
+        <div>
+          <strong>Hawki Link</strong>
+          <span class="sub" id="model">deepseek-chat</span>
+        </div>
+      </div>
+      <button id="settings" class="icon-btn" title="Settings">&#9881;</button>
+    </header>
+
+    <div id="ask" class="ask hidden">
+      <span class="ask-label">Needs your input</span>
+      <p id="ask-question"></p>
+    </div>
+
+    <main id="log" class="log" aria-live="polite">
+      <div class="empty">
+        Give the agent a goal, e.g. <em>&ldquo;Find the top 3 cited papers on
+        transformer interpretability on Google Scholar.&rdquo;</em>
+      </div>
+    </main>
+
+    <form id="composer" class="composer">
+      <textarea
+        id="goal"
+        rows="2"
+        placeholder="Ask Hawki to do something on the web..."
+      ></textarea>
+      <div class="actions">
+        <button type="submit" id="run" class="primary">Run</button>
+        <button type="button" id="stop" class="ghost" disabled>Stop</button>
+      </div>
+    </form>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
