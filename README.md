@@ -2,7 +2,8 @@
 
 A Chrome extension that puts an **autonomous web agent** in your browser. Give it
 a goal in plain English and it navigates, reads pages, clicks, types, logs in, and
-reports back — driven by a DeepSeek chat model.
+reports back — driven by a DeepSeek chat model, or by **Jev**, TypeSafe's
+non-generative System One decision model.
 
 > Examples: *"Find the 3 most cited papers on transformer interpretability on
 > Google Scholar and summarize them."* · *"Log into my email and tell me what's
@@ -11,6 +12,9 @@ reports back — driven by a DeepSeek chat model.
 ## Features
 
 - **Manifest V3** extension, no build step — load it unpacked.
+- **Two engines, one agent**: a chat model with OpenAI-style function calling
+  (DeepSeek, default), or a **Jev-only decision agent** that drives every step
+  through typed Choice/Score/Noul questions with calibrated confidence.
 - **Agent loop** with OpenAI-style function calling against the DeepSeek API.
 - **Observe → act → observe**: every state-changing action (click, type, submit,
   navigate) waits for the page to settle — including new tabs and navigation — and
@@ -68,9 +72,14 @@ Open the extension's **Settings** (gear icon in the popup):
 
 | Setting | Default | Notes |
 | --- | --- | --- |
+| Run the agent with | `deepseek` | `deepseek` (chat model + tools) or `jev` (System One decisions) |
 | API key | — | From https://platform.deepseek.com |
 | Base URL | `https://api.deepseek.com` | Any OpenAI-compatible endpoint |
 | Model | `deepseek-flash` | DeepSeek-V4.1-Flash (default) |
+| Jev API key | — | For the Jev engine, e.g. an OpenRouter key (`sk-or-v1-…`) |
+| Jev base URL | `https://openrouter.ai/api/v1` | Any endpoint that speaks the System One protocol |
+| Jev model | `typesafe/jev-1.13` | Jev via OpenRouter's System One route |
+| Jev confidence | `0.3` | Below this, the agent re-reads the page instead of acting |
 | Max steps | `40` | Hard cap on agent actions per task |
 | Temperature | `0.2` | Lower = more deterministic |
 | confirm() policy | `accept` | `accept` or `dismiss` when a page asks for confirmation |
@@ -87,6 +96,37 @@ The model field is free-text, so you can enter any other id your account exposes
 (`deepseek-chat`, `deepseek-reasoner`, …) and point the Base URL at the matching
 endpoint.
 
+### The Jev (System One) engine
+
+Select **Jev** under *Agent engine* to run the agent entirely on
+[Jev](https://docs.typesafe.ai), TypeSafe's System One decision model. Jev does not
+generate text and cannot call tools; instead each loop iteration sends the goal
+plus the current page as `state` and asks a batch of typed questions in one
+request:
+
+- **Choice** — the next action, the target element, a candidate URL, text to
+  type, a dropdown value, a scroll direction or a key.
+- **Noul** — "is the goal achieved?" and, at the end, "does this excerpt answer
+  the goal?" for each paragraph, so the final answer is a verbatim excerpt rather
+  than generated prose.
+
+The code composes those answers into browser actions and thresholds them by the
+*Minimum decision confidence* setting; below it the agent re-reads the page
+instead of acting. Because Jev cannot invent strings, candidate values (targets,
+URLs, and text lifted from quoted phrases in your goal, plus short excerpts of
+pages already read) are enumerated in code and the model selects among them — so
+the agent can carry a value it read on one page into a field on another.
+
+Multi-step goals (", then …") are split into atomic requirements, and completion
+is gated on a per-requirement Noul for each: the agent will not declare the goal
+finished while any requirement is still unmet.
+
+Jev is reachable through a System One endpoint such as OpenRouter
+(`https://openrouter.ai/api/v1/systemone`, model `typesafe/jev-1.13`) or the native
+TypeSafe API (`https://api.typesafe.ai/v1/systemone`, model `jev-1.13`). Note that
+**Defapi does not expose the System One route** (`/v1/systemone` returns 404), and
+OpenRouter only serves Jev on the System One route, not `/chat/completions`.
+
 ## Usage
 
 1. Open any website in the active tab.
@@ -99,19 +139,20 @@ endpoint.
 ## How it works
 
 ```
-popup.js ──hawki:start──▶ background.js ──▶ Agent (src/lib/agent.js)
-                               │                    │
-                               │              chatCompletion (src/lib/deepseek.js)
-                               │                    │
-                               ▼                    ▼
+popup.js ──hawki:start──▶ background.js ──┬─▶ Agent    (src/lib/agent.js)      ──▶ chatCompletion (src/lib/deepseek.js)
+                               │            └─▶ JevAgent (src/lib/jev-agent.js) ──▶ systemOne     (src/lib/typesafe.js)
+                               ▼
                         active tab ◀── content.js (DOM toolbox)
 ```
 
 - `src/content.js` assigns stable `data-hawki-id`s to interactive elements and
   performs the actual clicks/typing, reporting a snapshot of the page.
-- `src/background.js` owns the run loop, tab navigation, and tab lifecycle.
+- `src/background.js` owns the run loop, tab navigation, and tab lifecycle, and
+  picks the engine from settings (`provider`).
 - `src/lib/agent.js` is provider/browser agnostic: it feeds tool results back to
   the model until `finish` is called.
+- `src/lib/jev-agent.js` drives the same browser tools using only System One
+  decisions (see *The Jev (System One) engine* above).
 
 ## Security & limitations
 
@@ -143,7 +184,9 @@ src/
   popup.html/css/js    chat + activity log
   options.html/css/js  settings
   lib/
-    deepseek.js        API client
+    deepseek.js        DeepSeek (chat) API client
     prompt.js          system prompt + tool schemas
-    agent.js           agent loop
+    agent.js           chat-model agent loop
+    typesafe.js        System One (Jev) API client
+    jev-agent.js       Jev-only decision agent loop
 ```

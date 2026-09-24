@@ -2,12 +2,19 @@
 // relays events to the popup UI.
 
 import { Agent } from "./lib/agent.js";
+import { JevAgent } from "./lib/jev-agent.js";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./lib/deepseek.js";
+import { DEFAULT_JEV_BASE_URL, DEFAULT_JEV_MODEL } from "./lib/typesafe.js";
 
 const DEFAULT_SETTINGS = {
+  provider: "deepseek",
   apiKey: "",
   baseUrl: DEFAULT_BASE_URL,
   model: DEFAULT_MODEL,
+  jevApiKey: "",
+  jevBaseUrl: DEFAULT_JEV_BASE_URL,
+  jevModel: DEFAULT_JEV_MODEL,
+  jevConfidence: 0.3,
   temperature: 0.2,
   maxSteps: 40,
   dialogConfirm: "accept",
@@ -498,7 +505,8 @@ async function startSession(goal) {
   const tab = await getActiveTab();
   const tabIdRef = { current: tab.id };
 
-  const agent = new Agent({
+  const Engine = settings.provider === "jev" ? JevAgent : Agent;
+  const agent = new Engine({
     settings,
     browser: makeBrowser(tabIdRef),
     onLog: (entry) => emit({ kind: "log", ...entry }),

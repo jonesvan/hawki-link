@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Hawki Link",
-  "version": "0.5.0",
-  "description": "An autonomous browsing agent: read pages, log in, shop, search Google Scholar and more \u2014 powered by DeepSeek.",
+  "version": "0.6.0",
+  "description": "An autonomous browsing agent: read pages, log in, shop, search Google Scholar and more \u2014 powered by DeepSeek or Jev (TypeSafe System One).",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",

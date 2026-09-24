@@ -17,9 +17,25 @@
       </header>
 
       <section>
-        <h2>Model provider</h2>
+        <h2>Agent engine</h2>
         <label>
-          DeepSeek API key
+          Run the agent with
+          <select id="provider">
+            <option value="deepseek">DeepSeek (chat model + tools)</option>
+            <option value="jev">Jev (TypeSafe System One decisions)</option>
+          </select>
+        </label>
+        <p class="hint">
+          A chat model can reason and call tools. Jev is a non-generative
+          decision model: every step is a typed Choice/Score/Noul decision made
+          in code, so it cannot write free text or arbitrary code.
+        </p>
+      </section>
+
+      <section id="deepseekFields">
+        <h2>DeepSeek</h2>
+        <label>
+          API key
           <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" />
         </label>
         <p class="hint">
@@ -39,6 +55,36 @@
             <option value="deepseek-reasoner"></option>
           </datalist>
         </label>
+      </section>
+
+      <section id="jevFields">
+        <h2>Jev (TypeSafe System One)</h2>
+        <label>
+          API key
+          <input id="jevApiKey" type="password" placeholder="sk-or-v1-..." autocomplete="off" />
+        </label>
+        <label>
+          Base URL
+          <input id="jevBaseUrl" type="text" placeholder="https://openrouter.ai/api/v1" />
+        </label>
+        <label>
+          Model
+          <input id="jevModel" type="text" list="jevModels" placeholder="typesafe/jev-1.13" />
+          <datalist id="jevModels">
+            <option value="typesafe/jev-1.13"></option>
+            <option value="typesafe/jev-latest"></option>
+          </datalist>
+        </label>
+        <label>
+          Minimum decision confidence
+          <input id="jevConfidence" type="number" min="0" max="1" step="0.05" />
+        </label>
+        <p class="hint">
+          Below this confidence the agent re-reads the page instead of acting.
+          Jev is served by OpenRouter at
+          <code>https://openrouter.ai/api/v1/systemone</code>. Defapi does not
+          expose the System One route.
+        </p>
       </section>
 
       <section>

@@ -48,7 +48,10 @@ function setRunning(value) {
 }
 
 function renderEvent(event) {
-  switch (event.kind) {
+  // Agent log entries arrive wrapped as { kind: "log", type, ... }; everything
+  // else (start, finish, dialog, ...) carries its own kind.
+  const kind = event.kind === "log" ? event.type : event.kind;
+  switch (kind) {
     case "start":
       setRunning(true);
       append("user", `<span class="tag">Goal</span>${escapeHtml(event.goal)}`);
@@ -125,7 +128,12 @@ async function refreshState() {
 
 async function refreshModel() {
   const { settings } = await chrome.storage.local.get("settings");
-  if (settings && settings.model) el.model.textContent = settings.model;
+  if (!settings) return;
+  if (settings.provider === "jev") {
+    el.model.textContent = "Jev \u00b7 " + (settings.jevModel || "typesafe/jev-1.13");
+  } else if (settings.model) {
+    el.model.textContent = settings.model;
+  }
 }
 
 el.composer.addEventListener("submit", async (e) => {
