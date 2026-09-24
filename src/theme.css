@@ -1,0 +1,37 @@
+/* Shared theme: minimal, modern, follows the system light/dark preference. */
+:root {
+  color-scheme: light dark;
+
+  --bg: #ffffff;
+  --surface: #f7f7f8;
+  --surface-2: #f0f0f2;
+  --text: #18181b;
+  --muted: #71717a;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --accent: #4f46e5;
+  --accent-contrast: #ffffff;
+  --ok: #0f766e;
+  --warn: #b45309;
+  --danger: #dc2626;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e0e10;
+    --surface: #17171a;
+    --surface-2: #1f1f23;
+    --text: #f4f4f5;
+    --muted: #a1a1aa;
+    --border: #29292e;
+    --border-strong: #3f3f46;
+    --accent: #818cf8;
+    --accent-contrast: #0e0e10;
+    --ok: #2dd4bf;
+    --warn: #fbbf24;
+    --danger: #f87171;
+  }
+}

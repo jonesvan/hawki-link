@@ -3,14 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>Hawki Link</title>
+    <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <span class="logo">H</span>
-        <div>
+        <div class="brand-text">
           <strong>Hawki Link</strong>
           <span class="sub" id="model">deepseek-flash</span>
         </div>
@@ -20,7 +22,7 @@
 
     <main id="log" class="log" aria-live="polite">
       <div class="empty">
-        Give the agent a goal and it runs autonomously to the end. e.g.
+        Give the agent a goal and it runs to the end by itself, e.g.
         <em>&ldquo;Find the top 3 cited papers on transformer interpretability on
         Google Scholar.&rdquo;</em>
       </div>
@@ -30,7 +32,7 @@
       <textarea
         id="goal"
         rows="2"
-        placeholder="Tell Hawki what to do — it won't stop to ask questions..."
+        placeholder="Tell Hawki what to do&hellip;"
       ></textarea>
       <div class="actions">
         <button type="submit" id="run" class="primary">Run</button>

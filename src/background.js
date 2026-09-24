@@ -25,6 +25,15 @@ const DEFAULT_SETTINGS = {
   dialogPrompt: ""
 };
 
+// Open the chat in the side panel when the toolbar icon is clicked.
+function enableSidePanel() {
+  if (chrome.sidePanel?.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  }
+}
+enableSidePanel();
+chrome.runtime.onInstalled.addListener(enableSidePanel);
+
 let session = null; // { agent, tabId, running, cdp, downloads, routes }
 const eventHistory = []; // recent events, replayed when the popup reopens
 const HISTORY_LIMIT = 300;

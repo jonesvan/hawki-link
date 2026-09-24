@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Hawki Link",
-  "version": "0.7.0",
-  "description": "An autonomous browsing agent: read pages, log in, shop, search Google Scholar and more \u2014 powered by DeepSeek or Jev (TypeSafe System One).",
+  "version": "0.8.0",
+  "description": "An autonomous browsing agent in your side panel: read pages, log in, shop, search Google Scholar and more \u2014 powered by DeepSeek or Jev (TypeSafe System One).",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
@@ -12,7 +12,8 @@
     "offscreen",
     "debugger",
     "downloads",
-    "cookies"
+    "cookies",
+    "sidePanel"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -21,13 +22,15 @@
   },
   "action": {
     "default_title": "Hawki Link",
-    "default_popup": "src/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
+  },
+  "side_panel": {
+    "default_path": "src/popup.html"
   },
   "options_page": "src/options.html",
   "icons": {

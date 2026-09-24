@@ -5,6 +5,9 @@ a goal in plain English and it navigates, reads pages, clicks, types, logs in, a
 reports back — driven by a DeepSeek chat model, or by **Jev**, TypeSafe's
 non-generative System One decision model.
 
+It lives in Chrome's **side panel**, so the chat stays open on the right while
+you browse; the UI is minimal and follows your system light/dark theme.
+
 > Examples: *"Find the 3 most cited papers on transformer interpretability on
 > Google Scholar and summarize them."* · *"Log into my email and tell me what's
 > unread."* · *"Add a large pepperoni pizza to the cart on this site and check out."*
@@ -157,7 +160,8 @@ shadow roots.
 ## Usage
 
 1. Open any website in the active tab.
-2. Click the Hawki Link icon.
+2. Click the Hawki Link icon — the chat opens in the right-hand **side panel**
+   and stays there while you browse.
 3. Type a goal and press **Run**.
 4. Watch the log. The agent runs autonomously and shows every step — reasoning,
    tool calls, and observations — until it prints the final result.
