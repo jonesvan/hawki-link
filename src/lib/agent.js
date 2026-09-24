@@ -4,6 +4,66 @@
 import { chatCompletion } from "./deepseek.js";
 import { SYSTEM_PROMPT, TOOLS } from "./prompt.js";
 
+function pageView(page) {
+  if (!page) return null;
+  return {
+    url: page.url,
+    title: page.title,
+    elements: Array.isArray(page.elements) ? page.elements.length : 0,
+    preview: String(page.text || "").replace(/\s+/g, " ").slice(0, 220)
+  };
+}
+
+// Turn a raw tool result into a compact, human-readable step description.
+export function describeResult(name, result) {
+  const out = baseDescribe(name, result);
+  if (result && Array.isArray(result.dialogs) && result.dialogs.length) {
+    const kinds = [...new Set(result.dialogs.map((d) => d.kind))].join(", ");
+    out.text += ` \u2014 auto-handled page dialog (${kinds})`;
+    out.dialogs = result.dialogs.length;
+  }
+  return out;
+}
+
+function baseDescribe(name, result) {
+  if (!result) return { ok: false, text: "No result." };
+  if (result.__stop) return { ok: true, text: "Task marked complete." };
+  if (result.ok === false) return { ok: false, text: result.error || "Action failed." };
+
+  const page = result.page || (name === "get_page_state" ? result : null);
+  const view = pageView(page);
+
+  switch (name) {
+    case "get_page_state":
+      return {
+        ok: true,
+        text: `Read page: ${view?.title || view?.url || "(untitled)"} \u2014 ${view?.elements ?? 0} interactive elements`,
+        ...view
+      };
+    case "navigate":
+      return { ok: true, text: `Navigated to ${result.url || view?.url || ""}`, navigated: true, ...view };
+    case "click":
+      if (result.opened_new_tab) return { ok: true, text: `Opened new tab: ${view?.url || ""}`, navigated: true, ...view };
+      if (result.navigated) return { ok: true, text: `Clicked \u2192 navigated to ${view?.url || ""}`, navigated: true, ...view };
+      return { ok: true, text: `Clicked ${result.clicked || "element"}`, ...view };
+    case "type_text":
+      if (result.navigated) return { ok: true, text: `Submitted \u2192 navigated to ${view?.url || ""}`, navigated: true, ...view };
+      return { ok: true, text: `Typed ${result.typed || "text"}`, ...view };
+    case "select_option":
+      return { ok: true, text: `Selected "${result.selected || ""}"`, ...view };
+    case "press_key":
+      return { ok: true, text: "Pressed key", ...view };
+    case "scroll":
+      return { ok: true, text: `Scrolled (y=${result.scrollY ?? "?"})` };
+    case "wait":
+      return { ok: true, text: `Waited ${result.waited ?? "?"}ms` };
+    case "ask_user":
+      return { ok: true, text: "User responded." };
+    default:
+      return { ok: true, text: "Done." };
+  }
+}
+
 export class Agent {
   /**
    * @param {object} opts
@@ -23,6 +83,7 @@ export class Agent {
     this.messages = [{ role: "system", content: SYSTEM_PROMPT }];
     this.recent = []; // recent action signatures, for loop detection
     this.nudged = new Set();
+    this.currentStep = 0;
   }
 
   stop(reason = "Stopped by user.") {
@@ -40,6 +101,7 @@ export class Agent {
         return;
       }
       this.onLog({ type: "thinking", step: step + 1 });
+      this.currentStep = step + 1;
 
       let response;
       try {
@@ -65,8 +127,11 @@ export class Agent {
       const msg = response.message;
       this.messages.push(msg);
 
+      if (msg.reasoning_content) {
+        this.onLog({ type: "reasoning", text: msg.reasoning_content, step: this.currentStep });
+      }
       if (msg.content) {
-        this.onLog({ type: "assistant", text: msg.content });
+        this.onLog({ type: "assistant", text: msg.content, step: this.currentStep });
       }
 
       const toolCalls = msg.tool_calls || [];
@@ -142,39 +207,58 @@ export class Agent {
   }
 
   async executeTool(name, args) {
-    this.onLog({ type: "tool", name, args });
+    this.onLog({ type: "tool", name, args, step: this.currentStep });
+    let result;
     try {
       switch (name) {
         case "get_page_state":
-          return await this.browser.getPageState(args);
+          result = await this.browser.getPageState(args);
+          break;
         case "navigate":
-          return await this.browser.navigate(args);
+          result = await this.browser.navigate(args);
+          break;
         case "click":
-          return await this.browser.click(args.id);
+          result = await this.browser.click(args.id);
+          break;
         case "type_text":
-          return await this.browser.typeText(args.id, args.text, args.submit);
+          result = await this.browser.typeText(args.id, args.text, args.submit);
+          break;
         case "select_option":
-          return await this.browser.selectOption(args.id, args.value);
+          result = await this.browser.selectOption(args.id, args.value);
+          break;
         case "press_key":
-          return await this.browser.pressKey(args.key);
+          result = await this.browser.pressKey(args.key);
+          break;
         case "scroll":
-          return await this.browser.scroll(args.direction, args.amount);
+          result = await this.browser.scroll(args.direction, args.amount);
+          break;
         case "wait":
-          return await this.browser.wait(args.ms);
+          result = await this.browser.wait(args.ms);
+          break;
         case "ask_user": {
-          this.onLog({ type: "ask", text: args.question });
+          this.onLog({ type: "ask", text: args.question, step: this.currentStep });
           const answer = await this.onAsk(args.question);
-          return { ok: true, answer };
+          result = { ok: true, answer };
+          break;
         }
         case "finish":
-          return { __stop: true, ok: true, summary: args.summary };
+          result = { __stop: true, ok: true, summary: args.summary };
+          break;
         default:
-          return { ok: false, error: "Unknown tool: " + name };
+          result = { ok: false, error: "Unknown tool: " + name };
       }
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
-      this.onLog({ type: "error", text: message });
-      return { ok: false, error: message };
+      this.onLog({ type: "error", text: message, step: this.currentStep });
+      result = { ok: false, error: message };
     }
+
+    this.onLog({
+      type: "result",
+      name,
+      step: this.currentStep,
+      view: describeResult(name, result)
+    });
+    return result;
   }
 }

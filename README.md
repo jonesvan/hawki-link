@@ -18,6 +18,9 @@ reports back — driven by a DeepSeek chat model.
   returns a fresh snapshot so the agent always reasons over the real page.
 - **Loop detection**: if the agent repeats itself it is nudged to re-plan, and it
   stops cleanly rather than spinning forever.
+- **Dialog handling**: native `alert` / `confirm` / `prompt` and `window.print()`
+  are intercepted in the page's main world so they can't hang the agent, and every
+  one is reported as a step.
 - **Real browser control** via content scripts: page snapshots, clicks, typing,
   dropdown selection, key presses, scrolling, waits, navigation.
 - **Human in the loop**: the agent pauses with `ask_user` for credentials, and is
@@ -66,6 +69,8 @@ Open the extension's **Settings** (gear icon in the popup):
 | Model | `deepseek-flash` | DeepSeek-V4.1-Flash (default) |
 | Max steps | `25` | Hard cap on agent actions per task |
 | Temperature | `0.2` | Lower = more deterministic |
+| confirm() policy | `accept` | `accept` or `dismiss` when a page asks for confirmation |
+| prompt() value | *(site default)* | Value returned to a page's `prompt()` |
 
 ### About the model
 
@@ -110,7 +115,14 @@ popup.js ──hawki:start──▶ background.js ──▶ Agent (src/lib/agent
   trust, and prefer a dedicated browser profile if you want isolation.
 - Credentials you supply are typed into the page and are **not persisted** by the
   extension. Never paste secrets you don't want an LLM to see in the prompt.
-- It cannot yet solve CAPTCHAs or bypass bot protection.
+- **JS dialogs & print**: `alert`, `confirm`, `prompt` and `window.print()` are
+  overridden in the page (see Settings → *Page dialogs & print*). `confirm` is
+  auto-accepted (configurable), `prompt` returns a configured value, `alert` is
+  dismissed, and `window.print()` is suppressed. Every interception appears in the
+  activity log. Native browser UI — Ctrl+P / the browser print dialog, file
+  pickers (`<input type="file">`), permission prompts, and beforeunload prompts —
+  cannot be controlled by a content script and still require you.
+- It cannot solve CAPTCHAs or bypass bot protection.
 - Very large or heavily scripted pages may exceed the snapshot text budget; the
   agent can scroll and re-read.
 

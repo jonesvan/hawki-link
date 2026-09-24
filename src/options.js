@@ -8,7 +8,9 @@ const DEFAULTS = {
   baseUrl: DEFAULT_BASE_URL,
   model: DEFAULT_MODEL,
   temperature: 0.2,
-  maxSteps: 25
+  maxSteps: 25,
+  dialogConfirm: "accept",
+  dialogPrompt: ""
 };
 
 const fields = {
@@ -16,7 +18,9 @@ const fields = {
   baseUrl: document.getElementById("baseUrl"),
   model: document.getElementById("model"),
   maxSteps: document.getElementById("maxSteps"),
-  temperature: document.getElementById("temperature")
+  temperature: document.getElementById("temperature"),
+  dialogConfirm: document.getElementById("dialogConfirm"),
+  dialogPrompt: document.getElementById("dialogPrompt")
 };
 const status = document.getElementById("status");
 
@@ -33,6 +37,8 @@ async function load() {
   fields.model.value = s.model || DEFAULT_MODEL;
   fields.maxSteps.value = s.maxSteps;
   fields.temperature.value = s.temperature;
+  fields.dialogConfirm.value = s.dialogConfirm || "accept";
+  fields.dialogPrompt.value = s.dialogPrompt || "";
 }
 
 function read() {
@@ -41,7 +47,9 @@ function read() {
     baseUrl: fields.baseUrl.value.trim() || DEFAULT_BASE_URL,
     model: fields.model.value.trim() || DEFAULT_MODEL,
     maxSteps: Number(fields.maxSteps.value) || 25,
-    temperature: Number(fields.temperature.value)
+    temperature: Number(fields.temperature.value),
+    dialogConfirm: fields.dialogConfirm.value || "accept",
+    dialogPrompt: fields.dialogPrompt.value
   };
 }
 

@@ -273,6 +273,21 @@
     } catch (_) {}
   }
 
+  // Relay dialog/print events intercepted in the page's main world.
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const data = event.data;
+    if (!data || data.__hawkiDialog !== true) return;
+    try {
+      chrome.runtime.sendMessage({
+        type: "hawki:dialog",
+        kind: data.kind,
+        detail: data.detail,
+        url: location.href
+      });
+    } catch (_) {}
+  });
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || msg.source !== "hawki-agent") return false;
     (async () => {

@@ -16,12 +16,13 @@ const el = {
 let awaitingUser = false;
 let running = false;
 
-function append(kind, html) {
+function append(kind, html, step) {
   const empty = el.log.querySelector(".empty");
   if (empty) empty.remove();
   const div = document.createElement("div");
   div.className = "entry " + kind;
-  div.innerHTML = html;
+  const badge = step ? `<span class="step">#${step}</span>` : "";
+  div.innerHTML = badge + html;
   el.log.appendChild(div);
   el.log.scrollTop = el.log.scrollHeight;
   return div;
@@ -35,6 +36,11 @@ function escapeHtml(s) {
     '"': "&quot;",
     "'": "&#39;"
   }[c]));
+}
+
+function truncate(s, n) {
+  const str = String(s ?? "");
+  return str.length > n ? str.slice(0, n) + "\u2026" : str;
 }
 
 function setRunning(value) {
@@ -67,22 +73,59 @@ function renderEvent(event) {
       append("user", `<span class="tag">Goal</span>${escapeHtml(event.goal)}`);
       break;
     case "thinking":
-      append("thinking", `Thinking... (step ${event.step})`);
+      append(
+        "thinking",
+        event.text ? escapeHtml(event.text) : `Thinking\u2026`,
+        event.step
+      );
+      break;
+    case "reasoning":
+      append(
+        "reasoning",
+        `<span class="tag">Reasoning</span>${escapeHtml(truncate(event.text, 1200))}`,
+        event.step
+      );
       break;
     case "assistant":
-      append("assistant", `<span class="tag">Hawki</span>${escapeHtml(event.text)}`);
+      append(
+        "assistant",
+        `<span class="tag">Hawki</span>${escapeHtml(event.text)}`,
+        event.step
+      );
       break;
     case "tool":
       append(
         "tool",
         `<div><span class="name">${escapeHtml(event.name)}</span>(${escapeHtml(
-          JSON.stringify(event.args || {})
-        )})</div>`
+          truncate(JSON.stringify(event.args || {}), 160)
+        )})</div>`,
+        event.step
       );
       break;
+    case "result": {
+      const v = event.view || {};
+      const cls = v.ok === false ? "result bad" : "result";
+      let html = `<span class="tag">${v.ok === false ? "Failed" : "Result"}</span>` +
+        escapeHtml(v.text || "");
+      if (v.url) {
+        html += `<div class="meta">${escapeHtml(v.url)}</div>`;
+      }
+      if (v.preview) {
+        html += `<div class="preview">${escapeHtml(truncate(v.preview, 220))}</div>`;
+      }
+      append(cls, html, event.step);
+      break;
+    }
     case "ask":
-      append("assistant", `<span class="tag">Question</span>${escapeHtml(event.text)}`);
+      append("assistant", `<span class="tag">Question</span>${escapeHtml(event.text)}`, event.step);
       showAsk(event.text);
+      break;
+    case "dialog":
+      append(
+        "result",
+        `<span class="tag">Dialog: ${escapeHtml(event.kind)}</span>${escapeHtml(event.detail || "")}`,
+        event.step
+      );
       break;
     case "user-reply":
       clearAsk();
@@ -94,7 +137,7 @@ function renderEvent(event) {
       append("finish", `<span class="tag">Done</span>${escapeHtml(event.summary)}`);
       break;
     case "error":
-      append("error", `<span class="tag">Error</span>${escapeHtml(event.text)}`);
+      append("error", `<span class="tag">Error</span>${escapeHtml(event.text)}`, event.step);
       break;
   }
 }

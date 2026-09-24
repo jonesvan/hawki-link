@@ -78,7 +78,8 @@ label {
   color: var(--muted);
 }
 
-input {
+input,
+select {
   display: block;
   width: 100%;
   margin-top: 6px;
@@ -90,7 +91,8 @@ input {
   font: inherit;
   outline: none;
 }
-input:focus {
+input:focus,
+select:focus {
   border-color: var(--accent);
 }
 

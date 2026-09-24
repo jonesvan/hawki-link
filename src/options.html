@@ -55,6 +55,26 @@
         </div>
       </section>
 
+      <section>
+        <h2>Page dialogs &amp; print</h2>
+        <p class="hint">
+          Native <code>alert</code>, <code>confirm</code>, <code>prompt</code> and
+          <code>window.print()</code> block the page and cannot be seen from a content
+          script. Hawki Link intercepts them in the page so the agent never hangs.
+        </p>
+        <label>
+          When a page calls confirm()
+          <select id="dialogConfirm">
+            <option value="accept">Accept (return true)</option>
+            <option value="dismiss">Dismiss (return false)</option>
+          </select>
+        </label>
+        <label>
+          Value returned by prompt() (leave blank to return the site's default)
+          <input id="dialogPrompt" type="text" placeholder="" />
+        </label>
+      </section>
+
       <div class="actions">
         <button id="save" class="primary">Save</button>
         <button id="test" class="ghost">Test connection</button>
