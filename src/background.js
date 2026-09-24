@@ -109,16 +109,88 @@ function waitForTabComplete(tabId, timeoutMs = 20000) {
   });
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function tabStatus(tabId) {
+  try {
+    const t = await chrome.tabs.get(tabId);
+    return { id: t.id, url: t.url, status: t.status };
+  } catch (_) {
+    return null;
+  }
+}
+
+// Resolves with the first tab opened during the window (for target=_blank links
+// and window.open), or null.
+function watchNewTab(ms) {
+  return new Promise((resolve) => {
+    let created = null;
+    const listener = (tab) => {
+      if (!created) created = tab;
+    };
+    chrome.tabs.onCreated.addListener(listener);
+    setTimeout(() => {
+      chrome.tabs.onCreated.removeListener(listener);
+      resolve(created);
+    }, ms);
+  });
+}
+
+// Wait for the page to settle, then read it. This is the "observe" half of the
+// loop: every state-changing action ends by returning a fresh page snapshot.
+async function observe(tabIdRef, opts = {}) {
+  await waitForTabComplete(tabIdRef.current, opts.timeout || 15000);
+  await sleep(opts.settle ?? 250);
+  return await sendAction(tabIdRef.current, "snapshot", {
+    maxChars: opts.maxChars || 3500,
+    maxElements: opts.maxElements || 100
+  });
+}
+
+// Run a content-script action, detect navigation / new tabs, and return the
+// resulting page state so the model always reasons over the current page.
+async function runAction(tabIdRef, action, args) {
+  const before = await tabStatus(tabIdRef.current);
+  const watcher = watchNewTab(700);
+
+  let result;
+  let error = null;
+  try {
+    result = await sendAction(tabIdRef.current, action, args);
+  } catch (err) {
+    error = err;
+  }
+
+  const created = await watcher;
+  if (created && created.id !== tabIdRef.current) {
+    tabIdRef.current = created.id;
+    const page = await observe(tabIdRef);
+    return { ok: true, action, opened_new_tab: true, page };
+  }
+
+  await sleep(250);
+  const after = await tabStatus(tabIdRef.current);
+  const navigated =
+    !after || !before || after.url !== before.url || after.status === "loading";
+
+  if (navigated) {
+    const page = await observe(tabIdRef);
+    return { ok: true, action, navigated: true, page };
+  }
+
+  if (error) throw error;
+  return { ok: true, action, navigated: false, url: after?.url, ...(result || {}) };
+}
+
 function makeBrowser(tabIdRef) {
   const activeTabId = () => tabIdRef.current;
 
   return {
     async getPageState(args = {}) {
-      const state = await sendAction(activeTabId(), "snapshot", {
+      return await sendAction(activeTabId(), "snapshot", {
         maxChars: args.max_chars || 6000,
         maxElements: 120
       });
-      return state;
     },
 
     async navigate(args = {}) {
@@ -137,24 +209,24 @@ function makeBrowser(tabIdRef) {
         if (!/^https?:\/\//i.test(url)) url = "https://" + url;
         await chrome.tabs.update(id, { url });
       }
-      await waitForTabComplete(tabIdRef.current);
-      return { ok: true, url: (await chrome.tabs.get(tabIdRef.current)).url };
+      const page = await observe(tabIdRef, { timeout: 20000 });
+      return { ok: true, navigated: true, url: page.url, page };
     },
 
     async click(id) {
-      return await sendAction(activeTabId(), "click", { id });
+      return await runAction(tabIdRef, "click", { id });
     },
 
     async typeText(id, text, submit) {
-      return await sendAction(activeTabId(), "type", { id, text, submit: !!submit });
+      return await runAction(tabIdRef, "type", { id, text, submit: !!submit });
     },
 
     async selectOption(id, value) {
-      return await sendAction(activeTabId(), "select", { id, value });
+      return await runAction(tabIdRef, "select", { id, value });
     },
 
     async pressKey(key) {
-      return await sendAction(activeTabId(), "pressKey", { key });
+      return await runAction(tabIdRef, "pressKey", { key });
     },
 
     async scroll(direction, amount) {
@@ -163,7 +235,7 @@ function makeBrowser(tabIdRef) {
 
     async wait(ms) {
       const capped = Math.min(Math.max(Number(ms) || 1000, 100), 10000);
-      await new Promise((r) => setTimeout(r, capped));
+      await sleep(capped);
       return { ok: true, waited: capped };
     }
   };

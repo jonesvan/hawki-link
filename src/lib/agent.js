@@ -21,6 +21,8 @@ export class Agent {
     this.onFinish = onFinish || (() => {});
     this.abort = new AbortController();
     this.messages = [{ role: "system", content: SYSTEM_PROMPT }];
+    this.recent = []; // recent action signatures, for loop detection
+    this.nudged = new Set();
   }
 
   stop(reason = "Stopped by user.") {
@@ -98,10 +100,45 @@ export class Agent {
           this.onFinish(result.summary);
           return;
         }
+
+        const verdict = this.trackLoop(name, args);
+        if (verdict === "stuck") {
+          this.onFinish(
+            `I stopped because I kept repeating the same action (${name}) without ` +
+              "making progress. Set a more specific goal, or correct me and try again."
+          );
+          return;
+        }
       }
     }
 
     this.onFinish(`Stopped after reaching the ${maxSteps}-step limit.`);
+  }
+
+  // Loop detection: if the same action keeps recurring in the recent window, nudge
+  // the model to change strategy; if it persists, give up cleanly.
+  trackLoop(name, args) {
+    if (name === "scroll" || name === "wait" || name === "finish") return "ok";
+    const signature = name + ":" + JSON.stringify(args || {});
+    this.recent.push(signature);
+    if (this.recent.length > 6) this.recent.shift();
+
+    const occurrences = this.recent.filter((s) => s === signature).length;
+    if (occurrences >= 4) return "stuck";
+
+    if (occurrences >= 3 && !this.nudged.has(signature)) {
+      this.nudged.add(signature);
+      this.messages.push({
+        role: "system",
+        content:
+          "You are repeating the same action without progress. Stop and reassess: " +
+          "call get_page_state to re-read the current page, look for a different " +
+          "element or path forward, ask_user for help, or call finish if the goal " +
+          "is complete or cannot be achieved."
+      });
+      this.onLog({ type: "thinking", text: "Loop detected \u2014 nudging the agent to re-plan." });
+    }
+    return "ok";
   }
 
   async executeTool(name, args) {

@@ -13,6 +13,11 @@ reports back — driven by a DeepSeek chat model.
 
 - **Manifest V3** extension, no build step — load it unpacked.
 - **Agent loop** with OpenAI-style function calling against the DeepSeek API.
+- **Observe → act → observe**: every state-changing action (click, type, submit,
+  navigate) waits for the page to settle — including new tabs and navigation — and
+  returns a fresh snapshot so the agent always reasons over the real page.
+- **Loop detection**: if the agent repeats itself it is nudged to re-plan, and it
+  stops cleanly rather than spinning forever.
 - **Real browser control** via content scripts: page snapshots, clicks, typing,
   dropdown selection, key presses, scrolling, waits, navigation.
 - **Human in the loop**: the agent pauses with `ask_user` for credentials, and is
