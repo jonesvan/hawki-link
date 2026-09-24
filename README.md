@@ -30,6 +30,26 @@ reports back — driven by a DeepSeek chat model.
 5. The settings page opens automatically — paste your DeepSeek API key and click
    **Test connection**, then **Save**.
 
+## Download a build
+
+Prebuilt zips are attached to [GitHub Releases](../../releases/latest). To install
+a release build:
+
+1. Download `hawki-link-v<version>.zip` from the latest release.
+2. Unzip it — you get a `hawki-link/` folder containing `manifest.json`.
+3. Open `chrome://extensions`, enable **Developer mode**.
+4. Click **Load unpacked** and select the unzipped `hawki-link/` folder.
+
+To build the zip yourself (no dependencies):
+
+```bash
+node scripts/package.mjs   # -> dist/hawki-link-v<version>.zip
+```
+
+Pushing a tag like `v0.1.1` triggers the
+[release workflow](.github/workflows/release.yml), which builds the zip and
+attaches it to the GitHub Release automatically.
+
 ## Configure
 
 Open the extension's **Settings** (gear icon in the popup):
