@@ -30,6 +30,9 @@ const ACTIONS = [
   { name: "reload", label: "Reload the current page.", needs: [] },
   { name: "wait", label: "Pause briefly to let the page load or animations settle.", needs: [] },
   { name: "wait_for", label: "Wait until some text appears on the page.", needs: ["text"] },
+  { name: "screenshot", label: "Capture a screenshot of the current page and save it.", needs: [] },
+  { name: "accept_dialog", label: "Accept (OK) native browser dialogs from now on.", needs: [] },
+  { name: "dismiss_dialog", label: "Dismiss (Cancel) native browser dialogs from now on.", needs: [] },
   { name: "get_page_state", label: "Re-read the page (URL, text, elements) when the current view is stale.", needs: [] },
   { name: "finish", label: "The goal is fully achieved and the agent should report the result.", needs: [] }
 ];
@@ -498,6 +501,12 @@ export class JevAgent {
         return this.browser.waitFor("text", args.text);
       case "wait":
         return this.browser.wait(1000);
+      case "screenshot":
+        return this.browser.screenshot({});
+      case "accept_dialog":
+        return this.browser.dialog({ confirm: "accept" });
+      case "dismiss_dialog":
+        return this.browser.dialog({ confirm: "dismiss" });
       default:
         return { ok: false, error: "Unknown action: " + name };
     }

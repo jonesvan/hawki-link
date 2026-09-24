@@ -127,6 +127,33 @@ TypeSafe API (`https://api.typesafe.ai/v1/systemone`, model `jev-1.13`). Note th
 **Defapi does not expose the System One route** (`/v1/systemone` returns 404), and
 OpenRouter only serves Jev on the System One route, not `/chat/completions`.
 
+## Tools
+
+The agent drives the active tab through a Playwright-class tool surface. Actions
+take either an element id from the snapshot or a locator (`by`/`value`/`nth`).
+
+| Group | Tools |
+| --- | --- |
+| Observe | `get_page_state`, `read`, `find` (css/xpath/text/role/label/placeholder/testid/alt/title), `assert` |
+| Act | `click`, `dblclick`, `right_click`, `hover`, `type_text`, `select_option` (incl. multi), `check`, `focus`, `drag`, `press_key`, `scroll`, `scroll_into_view`, `upload` |
+| Navigate | `navigate` (url/back/forward/reload/new tab), `tabs` (list/new/activate/close) |
+| Input | `mouse` (move/down/up/click/wheel), `keyboard` (press/insert) |
+| Network | `network` (headers, auth, offline, throttle, block, route/mock, unroute) |
+| Environment | `emulate` (viewport, color scheme, reduced motion, geolocation, timezone, locale, UA) |
+| Capture | `screenshot`, `pdf`, `download`, `console` |
+| Page APIs | `evaluate`, `inject`, `clipboard`, `storage`, `cookies`, `dialog` |
+
+**Trusted input.** With *Trusted input* on (default), the extension attaches
+Chrome's debugger (`chrome.debugger`) and sends real mouse/keyboard events via
+CDP, enables file uploads, and unlocks `network`/`emulate`/`screenshot`/`pdf`/
+`console`. This shows Chrome's "debugging this browser" bar and adds the
+`debugger`, `downloads` and `cookies` permissions. Turn it off to stay on
+synthetic DOM events (no debugger bar, but no trusted input or CDP tools).
+
+**Actionability & shadow DOM.** Every action waits for its target to be
+visible, stable and enabled before acting, and element collection pierces open
+shadow roots.
+
 ## Usage
 
 1. Open any website in the active tab.
@@ -189,4 +216,6 @@ src/
     agent.js           chat-model agent loop
     typesafe.js        System One (Jev) API client
     jev-agent.js       Jev-only decision agent loop
+    cdp.js             chrome.debugger bridge (trusted input/network/emulation)
+    downloads.js       download capture + save
 ```

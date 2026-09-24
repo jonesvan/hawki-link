@@ -99,6 +99,19 @@
             <input id="temperature" type="number" min="0" max="2" step="0.1" />
           </label>
         </div>
+        <label>
+          Trusted input
+          <select id="trustedInput">
+            <option value="true">On (real browser events via the debugger)</option>
+            <option value="false">Off (synthetic events only)</option>
+          </select>
+        </label>
+        <p class="hint">
+          Trusted input attaches Chrome's debugger to send real mouse/keyboard
+          events (needed by canvas apps, file uploads, and sites that check
+          <code>isTrusted</code>). It shows a "debugging this browser" bar and
+          unlocks network/emulation tools.
+        </p>
       </section>
 
       <section>

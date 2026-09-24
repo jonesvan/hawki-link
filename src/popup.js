@@ -103,7 +103,7 @@ function renderEvent(event) {
     case "dialog":
       append(
         "result",
-        `<span class="tag">Dialog: ${escapeHtml(event.kind)}</span>${escapeHtml(event.detail || "")}`,
+        `<span class="tag">Dialog: ${escapeHtml(event.dialogKind || "page")}</span>${escapeHtml(event.detail || "")}`,
         event.step
       );
       break;

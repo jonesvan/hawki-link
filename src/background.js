@@ -1,10 +1,13 @@
 // Background service worker: wires the agent loop to Chrome's tab APIs and
-// relays events to the popup UI.
+// relays events to the popup UI. Also exposes the full browser tool surface to
+// the agent (synthetic DOM actions + a CDP-backed trusted layer).
 
 import { Agent } from "./lib/agent.js";
 import { JevAgent } from "./lib/jev-agent.js";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./lib/deepseek.js";
 import { DEFAULT_JEV_BASE_URL, DEFAULT_JEV_MODEL } from "./lib/typesafe.js";
+import { CdpSession } from "./lib/cdp.js";
+import { DownloadManager } from "./lib/downloads.js";
 
 const DEFAULT_SETTINGS = {
   provider: "deepseek",
@@ -17,11 +20,12 @@ const DEFAULT_SETTINGS = {
   jevConfidence: 0.3,
   temperature: 0.2,
   maxSteps: 40,
+  trustedInput: true,
   dialogConfirm: "accept",
   dialogPrompt: ""
 };
 
-let session = null; // { agent, pendingAsk, tabId, running }
+let session = null; // { agent, tabId, running, cdp, downloads, routes }
 const eventHistory = []; // recent events, replayed when the popup reopens
 const HISTORY_LIMIT = 300;
 
@@ -158,6 +162,7 @@ async function injectIntoFrames(tabId) {
 // Element ids are prefixed with their frame id ("3:12"), so we can route an
 // action back to the right frame.
 function frameOfId(id) {
+  if (id && typeof id === "object") id = id.id;
   const m = String(id ?? "").match(/^(\d+):/);
   return m ? Number(m[1]) : null;
 }
@@ -292,20 +297,18 @@ async function observe(tabIdRef, opts = {}) {
   });
 }
 
-// Run an action in the frame that owns the target element, detect navigation /
-// new tabs, and return the resulting page state.
-async function runAction(tabIdRef, action, args, lastFrameRef, opts = {}) {
+// Run a `perform()` action, detect navigation / new tabs, and return the
+// resulting page state. `perform` may target the DOM (sendToFrame) or drive the
+// CDP trusted-input layer.
+async function runAction(tabIdRef, perform, opts = {}) {
   const before = await tabStatus(tabIdRef.current);
   const watch = opts.watch !== false;
   const watcher = watch ? watchNewTab(450) : Promise.resolve(null);
-  const idForFrame = (args && (args.id || args.from_id)) || null;
-  const frameId = frameOfId(idForFrame) ?? (lastFrameRef ? lastFrameRef.current : 0);
-  if (lastFrameRef && frameId != null) lastFrameRef.current = frameId;
 
   let result;
   let error = null;
   try {
-    result = await sendToFrame(tabIdRef.current, frameId, action, args);
+    result = await perform();
   } catch (err) {
     error = err;
   }
@@ -314,12 +317,12 @@ async function runAction(tabIdRef, action, args, lastFrameRef, opts = {}) {
   if (created && created.id !== tabIdRef.current) {
     tabIdRef.current = created.id;
     const page = await observe(tabIdRef);
-    return attachDialogs({ ok: true, action, opened_new_tab: true, page });
+    return attachDialogs({ ok: true, action: opts.name, opened_new_tab: true, page });
   }
 
   if (!watch) {
     if (error) throw error;
-    return attachDialogs({ ok: true, action, ...(result || {}) });
+    return attachDialogs({ ok: true, action: opts.name, ...(result || {}) });
   }
 
   await sleep(120);
@@ -329,22 +332,63 @@ async function runAction(tabIdRef, action, args, lastFrameRef, opts = {}) {
 
   if (navigated) {
     const page = await observe(tabIdRef);
-    return attachDialogs({ ok: true, action, navigated: true, page });
+    return attachDialogs({ ok: true, action: opts.name, navigated: true, page });
   }
 
   if (error) throw error;
-  return attachDialogs({ ok: true, action, navigated: false, url: after?.url, ...(result || {}) });
+  return attachDialogs({ ok: true, action: opts.name, navigated: false, url: after?.url, ...(result || {}) });
 }
 
-function makeBrowser(tabIdRef) {
+function makeBrowser(tabIdRef, sessionRef) {
   const activeTabId = () => tabIdRef.current;
   const lastFrameRef = { current: 0 };
+  const cdp = () => sessionRef.cdp;
+  const downloads = () => sessionRef.downloads;
+  const trustedEnabled = () => sessionRef.settings?.trustedInput !== false;
+
+  function frameFor(args) {
+    const frameId = frameOfId(args) ?? lastFrameRef.current;
+    lastFrameRef.current = frameId;
+    return frameId;
+  }
+
+  function contentCall(action, args) {
+    const frameId = frameFor(args);
+    return sendToFrame(activeTabId(), frameId, action, args);
+  }
+
+  // DOM action with an optional trusted (CDP) fast path for top-frame targets.
+  function domAction(name, action, args, { watch = true, trusted = null } = {}) {
+    const perform = async () => {
+      const frameId = frameFor(args);
+      if (trusted && trustedEnabled() && cdp()?.attached && frameId === 0) {
+        try {
+          return await trusted();
+        } catch (err) {
+          const fallback = await sendToFrame(activeTabId(), frameId, action, args);
+          return { ...fallback, trusted_fallback: String(err.message || err) };
+        }
+      }
+      return sendToFrame(activeTabId(), frameId, action, args);
+    };
+    return runAction(tabIdRef, perform, { name, watch });
+  }
+
+  async function pointOf(args) {
+    const frameId = frameFor(args);
+    const p = await sendToFrame(activeTabId(), frameId, "point", args);
+    return { ...p, frameId };
+  }
+
+  async function syncCdpTab() {
+    if (cdp()?.attached) await cdp().switchTo(activeTabId()).catch(() => {});
+  }
 
   return {
     async getPageState(args = {}) {
       const state = await snapshotAll(activeTabId(), {
         maxChars: args.max_chars || 6000,
-        maxElements: 120
+        maxElements: args.max_elements || 120
       });
       return attachDialogs(state);
     },
@@ -360,6 +404,7 @@ function makeBrowser(tabIdRef) {
       } else if (args.new_tab) {
         const tab = await chrome.tabs.create({ url: target });
         tabIdRef.current = tab.id;
+        await syncCdpTab();
       } else {
         let url = target;
         if (!/^https?:\/\//i.test(url)) url = "https://" + url;
@@ -370,57 +415,368 @@ function makeBrowser(tabIdRef) {
       return attachDialogs({ ok: true, navigated: true, url: page.url, page });
     },
 
-    async click(id) {
-      return await runAction(tabIdRef, "click", { id }, lastFrameRef);
+    click(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return domAction("click", "click", a, {
+        trusted: async () => {
+          const p = await pointOf(a);
+          await cdp().mouseMove(p.x, p.y);
+          await cdp().mouseClick(p.x, p.y, {
+            button: a.button === "right" ? "right" : a.button === "middle" ? "middle" : "left",
+            clickCount: a.click_count || 1
+          });
+          return { clicked: p.label, trusted: true };
+        }
+      });
     },
 
-    async dblclick(id) {
-      return await runAction(tabIdRef, "dblclick", { id }, lastFrameRef);
+    dblclick(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return domAction("dblclick", "dblclick", a, {
+        trusted: async () => {
+          const p = await pointOf(a);
+          await cdp().mouseMove(p.x, p.y);
+          await cdp().mouseClick(p.x, p.y, { clickCount: 2 });
+          return { doubleClicked: p.label, trusted: true };
+        }
+      });
     },
 
-    async rightClick(id) {
-      return await runAction(tabIdRef, "rightClick", { id }, lastFrameRef);
+    rightClick(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return domAction("right_click", "rightClick", a, {
+        trusted: async () => {
+          const p = await pointOf(a);
+          await cdp().mouseMove(p.x, p.y);
+          await cdp().mouseClick(p.x, p.y, { button: "right" });
+          return { rightClicked: p.label, trusted: true };
+        }
+      });
     },
 
-    async hover(id) {
-      return await runAction(tabIdRef, "hover", { id }, lastFrameRef, { watch: false });
+    hover(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return domAction("hover", "hover", a, {
+        watch: false,
+        trusted: async () => {
+          const p = await pointOf(a);
+          await cdp().mouseMove(p.x, p.y);
+          return { hovered: p.label, trusted: true };
+        }
+      });
     },
 
-    async typeText(id, text, submit) {
-      return await runAction(tabIdRef, "type", { id, text, submit: !!submit }, lastFrameRef);
+    typeText(args) {
+      const a =
+        typeof args === "object"
+          ? args
+          : { id: args, text: arguments[1], submit: arguments[2] };
+      return domAction("type_text", "type", a, {
+        trusted: async () => {
+          const prep = await contentCall("prepareType", a);
+          await cdp().insertText(a.text);
+          if (a.submit) await cdp().keyPress("Enter");
+          return { typed: String(a.text ?? "").length + " chars", focused: prep.focused, trusted: true };
+        }
+      });
     },
 
-    async selectOption(id, value) {
-      return await runAction(tabIdRef, "select", { id, value }, lastFrameRef);
+    selectOption(args) {
+      const a = typeof args === "object" ? args : { id: args, value: arguments[1] };
+      return domAction("select_option", "select", a);
     },
 
-    async check(id, checked) {
-      return await runAction(tabIdRef, "check", { id, checked }, lastFrameRef);
+    check(args) {
+      const a = typeof args === "object" ? args : { id: args, checked: arguments[1] };
+      return domAction("check", "check", a);
     },
 
-    async focus(id) {
-      return await runAction(tabIdRef, "focus", { id }, lastFrameRef, { watch: false });
+    focus(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return domAction("focus", "focus", a, { watch: false });
     },
 
-    async read(id) {
-      return await runAction(tabIdRef, "read", { id }, lastFrameRef, { watch: false });
+    read(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return domAction("read", "read", a, { watch: false });
     },
 
-    async scrollIntoView(id) {
-      return await runAction(tabIdRef, "scrollIntoView", { id }, lastFrameRef, { watch: false });
+    point(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return pointOf(a);
     },
 
-    async pressKey(keys) {
-      return await runAction(tabIdRef, "pressKey", { keys }, lastFrameRef);
+    find(args) {
+      return domAction("find", "locate", args || {}, { watch: false });
     },
 
-    async drag(fromId, toId) {
-      return await runAction(
-        tabIdRef,
-        "drag",
-        { from_id: fromId, to_id: toId },
-        lastFrameRef
-      );
+    assert(args) {
+      return domAction("assert", "assert", args || {}, { watch: false });
+    },
+
+    inject(args) {
+      return domAction("inject", "inject", args || {}, { watch: false });
+    },
+
+    clipboard(args) {
+      return domAction("clipboard", "clipboard", args || {}, { watch: false });
+    },
+
+    storage(args) {
+      return domAction("storage", "storage", args || {}, { watch: false });
+    },
+
+    scrollIntoView(args) {
+      const a = typeof args === "object" ? args : { id: args };
+      return domAction("scroll_into_view", "scrollIntoView", a, { watch: false });
+    },
+
+    pressKey(args) {
+      const combo = typeof args === "string" ? args : args.keys || args.key || "Enter";
+      return domAction("press_key", "pressKey", { keys: combo }, {
+        trusted: async () => {
+          await cdp().keyPress(combo);
+          return { pressed: combo, trusted: true };
+        }
+      });
+    },
+
+    mouse(args = {}) {
+      const frameId = lastFrameRef.current;
+      const perform = async () => {
+        if (!cdp()?.attached) throw new Error("Debugger not attached; use click/hover instead.");
+        if (args.op === "move") await cdp().mouseMove(args.x || 0, args.y || 0);
+        else if (args.op === "down") await cdp().mouseDown(args.x || 0, args.y || 0, { button: args.button || "left", clickCount: 1, buttons: 1 });
+        else if (args.op === "up") await cdp().mouseUp(args.x || 0, args.y || 0, { button: args.button || "left", clickCount: 1, buttons: 0 });
+        else if (args.op === "wheel") await cdp().wheel(args.x || 0, args.y || 0, args.delta_x || 0, args.delta_y || 0);
+        else if (args.op === "click") await cdp().mouseClick(args.x || 0, args.y || 0, { button: args.button || "left", clickCount: args.click_count || 1 });
+        else return { ok: false, error: "Unknown mouse op: " + args.op };
+        return { ok: true, op: args.op };
+      };
+      return runAction(tabIdRef, perform, { name: "mouse", watch: false });
+    },
+
+    keyboard(args = {}) {
+      const perform = async () => {
+        if (!cdp()?.attached) throw new Error("Debugger not attached.");
+        if (args.op === "insert") await cdp().insertText(args.text || "");
+        else await cdp().keyPress(args.keys || args.key || "Enter");
+        return { ok: true, op: args.op || "press" };
+      };
+      return runAction(tabIdRef, perform, { name: "keyboard", watch: false });
+    },
+
+    drag(args = {}) {
+      const a = args;
+      return domAction("drag", "drag", a, {
+        trusted: async () => {
+          const from = await pointOf({ id: a.from_id });
+          const to = await pointOf({ id: a.to_id });
+          await cdp().drag({ x: from.x, y: from.y }, { x: to.x, y: to.y });
+          return { dragged: from.label, to: to.label, trusted: true };
+        }
+      });
+    },
+
+    async upload(args = {}) {
+      if (!cdp()?.attached) {
+        return { ok: false, error: "File upload requires the debugger (enable trusted input)." };
+      }
+      const frameId = frameFor(args);
+      if (frameId !== 0) {
+        return { ok: false, error: "File inputs inside iframes are not supported." };
+      }
+      const files = Array.isArray(args.files) ? args.files : [args.file].filter(Boolean);
+      const r = await cdp().setFileInput(args.id, files);
+      if (!r.ok) return r;
+      return attachDialogs({ ok: true, uploaded: files });
+    },
+
+    async tabs(args = {}) {
+      const op = args.op || "list";
+      if (op === "list") {
+        const tabs = await chrome.tabs.query({});
+        return {
+          ok: true,
+          tabs: tabs.map((t) => ({ id: t.id, url: t.url, title: t.title, active: t.active }))
+        };
+      }
+      if (op === "new") {
+        const tab = await chrome.tabs.create({ url: args.url, active: !!args.active });
+        if (args.active) {
+          tabIdRef.current = tab.id;
+          await syncCdpTab();
+        }
+        return { ok: true, id: tab.id };
+      }
+      if (op === "activate") {
+        await chrome.tabs.update(args.id, { active: true });
+        tabIdRef.current = args.id;
+        lastFrameRef.current = 0;
+        await syncCdpTab();
+        const page = await observe(tabIdRef);
+        return attachDialogs({ ok: true, page });
+      }
+      if (op === "close") {
+        await chrome.tabs.remove(args.id);
+        return { ok: true };
+      }
+      return { ok: false, error: "Unknown tabs op: " + op };
+    },
+
+    async cookies(args = {}) {
+      const op = args.op || "get";
+      if (op === "get") {
+        const cookies = args.url
+          ? await chrome.cookies.getAll({ url: args.url })
+          : await chrome.cookies.getAll({ domain: args.domain });
+        return { ok: true, cookies: cookies.map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure })) };
+      }
+      if (op === "set") {
+        const details = { url: args.url, name: args.name, value: args.value ?? "" };
+        if (args.domain) details.domain = args.domain;
+        if (args.path) details.path = args.path;
+        const cookie = await chrome.cookies.set(details);
+        return { ok: !!cookie, cookie };
+      }
+      if (op === "remove") {
+        await chrome.cookies.remove({ url: args.url, name: args.name });
+        return { ok: true };
+      }
+      if (op === "clear") {
+        const list = args.url ? await chrome.cookies.getAll({ url: args.url }) : await chrome.cookies.getAll({ domain: args.domain });
+        for (const c of list) {
+          const host = (c.domain || "").replace(/^\./, "");
+          await chrome.cookies.remove({ url: `https://${host}${c.path || "/"}`, name: c.name }).catch(() => {});
+        }
+        return { ok: true, removed: list.length };
+      }
+      return { ok: false, error: "Unknown cookies op: " + op };
+    },
+
+    async network(args = {}) {
+      const c = cdp();
+      if (!c?.attached) return { ok: false, error: "Network control requires the debugger (enable trusted input)." };
+      const op = args.op;
+      if (op === "set_headers") {
+        await c.setExtraHeaders(args.headers || {});
+        return { ok: true };
+      }
+      if (op === "auth") {
+        await c.setAuth(args.username, args.password);
+        return { ok: true };
+      }
+      if (op === "offline") {
+        await c.setOffline(true, { latency: args.latency || 0 });
+        return { ok: true };
+      }
+      if (op === "online") {
+        await c.setOffline(false);
+        return { ok: true };
+      }
+      if (op === "throttle") {
+        await c.setOffline(false, {
+          latency: args.latency || 0,
+          downloadThroughput: args.download_throughput ?? -1,
+          uploadThroughput: args.upload_throughput ?? -1
+        });
+        return { ok: true };
+      }
+      if (op === "block") {
+        await c.setBlockedURLs(args.urls || []);
+        return { ok: true };
+      }
+      if (op === "route") {
+        sessionRef.routes = sessionRef.routes || [];
+        sessionRef.routes.push({
+          pattern: args.pattern || "*",
+          status: args.status,
+          body: args.body,
+          contentType: args.content_type,
+          headers: args.headers,
+          abort: !!args.abort
+        });
+        await c.setRoutes(sessionRef.routes);
+        return { ok: true, routes: sessionRef.routes.length };
+      }
+      if (op === "unroute") {
+        sessionRef.routes = [];
+        await c.setRoutes([]);
+        return { ok: true };
+      }
+      return { ok: false, error: "Unknown network op: " + op };
+    },
+
+    async emulate(args = {}) {
+      const c = cdp();
+      if (!c?.attached) return { ok: false, error: "Emulation requires the debugger (enable trusted input)." };
+      if (args.viewport === "reset") await c.clearDeviceMetrics();
+      else if (args.width && args.height) {
+        await c.setDeviceMetrics(args.width, args.height, {
+          deviceScaleFactor: args.device_scale_factor || 1,
+          mobile: !!args.mobile
+        });
+      }
+      if (args.color_scheme || args.reduced_motion || args.media) {
+        await c.setMedia({ colorScheme: args.color_scheme, reducedMotion: args.reduced_motion, media: args.media });
+      }
+      if (args.geolocation) await c.setGeolocation(args.geolocation.latitude, args.geolocation.longitude, args.geolocation.accuracy);
+      if (args.timezone) await c.setTimezone(args.timezone);
+      if (args.locale) await c.setLocale(args.locale);
+      if (args.user_agent) await c.setUserAgent(args.user_agent, args.platform);
+      return { ok: true };
+    },
+
+    async screenshot(args = {}) {
+      const format = args.format || "png";
+      let b64 = null;
+      if (cdp()?.attached) {
+        const r = await cdp().screenshot({ fullPage: !!args.full_page, format, quality: args.quality });
+        if (!r.ok) return r;
+        b64 = r.data;
+      } else {
+        const tab = await chrome.tabs.get(activeTabId());
+        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format });
+        b64 = String(dataUrl).split(",")[1];
+      }
+      const filename = args.filename || `hawki-screenshot-${Date.now()}.${format}`;
+      const saved = await downloads().saveDataUrl(`data:image/${format};base64,${b64}`, filename);
+      return { ok: saved.ok, filename: saved.filename, bytes: saved.bytes, error: saved.error };
+    },
+
+    async pdf(args = {}) {
+      if (!cdp()?.attached) return { ok: false, error: "PDF requires the debugger (enable trusted input)." };
+      const r = await cdp().printToPDF({ landscape: !!args.landscape, printBackground: args.print_background !== false });
+      if (!r.ok) return r;
+      const filename = args.filename || `hawki-page-${Date.now()}.pdf`;
+      const saved = await downloads().saveDataUrl(`data:application/pdf;base64,${r.data}`, filename);
+      return { ok: saved.ok, filename: saved.filename, bytes: saved.bytes, error: saved.error };
+    },
+
+    async download(args = {}) {
+      if (args.action === "save") {
+        return await downloads().saveUrl(args.url, args.filename);
+      }
+      return await downloads().waitForDownload({ urlPart: args.url_part, timeoutMs: args.timeout_ms });
+    },
+
+    console(args = {}) {
+      const logs = cdp()?.getConsole(args.clear !== false) || [];
+      return { ok: true, count: logs.length, entries: logs };
+    },
+
+    dialog(args = {}) {
+      if (args.confirm) dialogPolicy.confirm = args.confirm;
+      if (args.prompt != null) dialogPolicy.prompt = args.prompt;
+      chrome.scripting
+        .executeScript({
+          target: { tabId: activeTabId(), allFrames: true },
+          world: "MAIN",
+          func: installDialogHandlers,
+          args: [dialogPolicy]
+        })
+        .catch(() => {});
+      return { ok: true, policy: { ...dialogPolicy } };
     },
 
     async evaluate(code) {
@@ -453,36 +809,51 @@ function makeBrowser(tabIdRef) {
       return attachDialogs(r || { ok: false, error: "evaluate returned no result." });
     },
 
-    async waitFor(type, value, timeoutMs) {
-      const deadline = Date.now() + Math.min(Math.max(Number(timeoutMs) || 10000, 500), 30000);
+    async waitFor(args, value, timeoutMs) {
+      const opts = typeof args === "object" ? args : { type: args, value, timeout_ms: timeoutMs };
+      const type = opts.type;
+      const val = opts.value;
+      const deadline = Date.now() + Math.min(Math.max(Number(opts.timeout_ms) || 10000, 500), 30000);
       const tabId = activeTabId();
+
+      if (type === "response") {
+        if (!cdp()?.attached) return { ok: false, error: "Response waiting requires the debugger." };
+        return await cdp().waitForResponse(val, Number(opts.timeout_ms) || 15000);
+      }
+      if (type === "load") {
+        await waitForTabComplete(tabId, Number(opts.timeout_ms) || 15000);
+        return { ok: true, matched: true };
+      }
+
       while (Date.now() < deadline) {
         if (type === "url") {
           const t = await tabStatus(tabId);
-          if (t && t.url && t.url.includes(value)) return { ok: true, matched: true, url: t.url };
-        } else if (type === "selector") {
-          const frameIds = await injectIntoFrames(tabId);
-          for (const frameId of frameIds) {
-            const r = await sendToFrame(tabId, frameId, "query", { selector: value }).catch(() => null);
-            if (r && r.ok && r.count > 0) return { ok: true, matched: true, count: r.count };
+          if (t && t.url && t.url.includes(val)) return { ok: true, matched: true, url: t.url };
+        } else if (type === "selector" || type === "visible" || type === "hidden" || type === "detached") {
+          const located = await sendToFrame(tabId, 0, "locate", { selector: val, max: 5 }).catch(() => null);
+          const count = located?.count || 0;
+          if (type === "selector" && count > 0) return { ok: true, matched: true, count };
+          if (type === "detached" && count === 0) return { ok: true, matched: true };
+          if ((type === "visible" || type === "hidden") && count > 0) {
+            const vis = located.matches.some((m) => m.visible);
+            if (type === "visible" && vis) return { ok: true, matched: true };
+            if (type === "hidden" && !vis) return { ok: true, matched: true };
           }
+          if (type === "hidden" && count === 0) return { ok: true, matched: true };
+        } else if (type === "function") {
+          const r = await this.evaluate(`(${val})`).catch(() => null);
+          if (r && r.ok && r.value) return { ok: true, matched: true, value: r.value };
         } else {
           const snap = await snapshotAll(tabId, { maxChars: 8000, maxElements: 1 }).catch(() => null);
-          if (snap && snap.text && snap.text.includes(value)) return { ok: true, matched: true };
+          if (snap && snap.text && snap.text.includes(val)) return { ok: true, matched: true };
         }
         await sleep(250);
       }
-      return { ok: false, error: `Timed out waiting for ${type} "${value}".` };
+      return { ok: false, error: `Timed out waiting for ${type} "${val}".` };
     },
 
-    async scroll(direction, amount) {
-      const frameIds = await injectIntoFrames(activeTabId());
-      const results = await Promise.all(
-        frameIds.map((frameId) =>
-          sendToFrame(activeTabId(), frameId, "scroll", { direction, amount }).catch(() => null)
-        )
-      );
-      return attachDialogs(results.find(Boolean) || { ok: true });
+    scroll(args = {}) {
+      return domAction("scroll", "scroll", args, { watch: false });
     },
 
     async wait(ms) {
@@ -505,19 +876,35 @@ async function startSession(goal) {
   const tab = await getActiveTab();
   const tabIdRef = { current: tab.id };
 
+  const cdp = new CdpSession(tab.id);
+  const downloads = new DownloadManager();
+  session = { tabId: tab.id, running: true, settings, cdp, downloads, routes: [] };
+
+  if (settings.trustedInput !== false) {
+    const attached = await cdp.attach();
+    if (!attached.ok) {
+      emit({
+        kind: "log",
+        type: "error",
+        step: 0,
+        text: "Trusted input unavailable (" + (attached.error || "attach failed") + "); using synthetic events."
+      });
+    }
+  }
+
   const Engine = settings.provider === "jev" ? JevAgent : Agent;
   const agent = new Engine({
     settings,
-    browser: makeBrowser(tabIdRef),
+    browser: makeBrowser(tabIdRef, session),
     onLog: (entry) => emit({ kind: "log", ...entry }),
     onFinish: (summary) => {
       emit({ kind: "finish", summary });
       if (session) session.running = false;
-      releaseKeepalive().catch(() => {});
+      cleanupSession();
     }
   });
+  session.agent = agent;
 
-  session = { agent, tabId: tab.id, running: true };
   eventHistory.length = 0;
   try {
     await ensureKeepalive();
@@ -529,8 +916,16 @@ async function startSession(goal) {
   agent.run(goal).catch((err) => {
     emit({ kind: "finish", summary: "Agent crashed: " + err.message });
     if (session) session.running = false;
-    releaseKeepalive().catch(() => {});
+    cleanupSession();
   });
+}
+
+function cleanupSession() {
+  if (session) {
+    session.cdp?.detach().catch(() => {});
+    session.downloads?.dispose();
+  }
+  releaseKeepalive().catch(() => {});
 }
 
 function stopSession() {
@@ -538,7 +933,7 @@ function stopSession() {
   session.agent.stop("Stopped by user.");
   session.running = false;
   emit({ kind: "finish", summary: "Stopped by user." });
-  releaseKeepalive().catch(() => {});
+  cleanupSession();
   return { ok: true };
 }
 
@@ -549,57 +944,60 @@ function sessionState() {
   };
 }
 
+// Test/debug hook: invoke a single browser tool against the active tab. Disabled
+// unless settings.testApi is true (never set by the UI). Keeps the CDP session
+// attached so emulation/network state persists across calls.
+let testSession = null;
+async function invokeTool(method, args = {}) {
+  const settings = await loadSettings();
+  if (settings.testApi !== true) return { ok: false, error: "test api disabled" };
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) return { ok: false, error: "No active tab." };
+  const tabIdRef = { current: tab.id };
+  if (!testSession || testSession.tabId !== tab.id) {
+    if (testSession) {
+      testSession.cdp.detach().catch(() => {});
+      testSession.downloads.dispose();
+    }
+    const cdp = new CdpSession(tab.id);
+    const downloads = new DownloadManager();
+    testSession = { tabId: tab.id, cdp, downloads, settings, routes: [] };
+    if (settings.trustedInput !== false) await cdp.attach();
+  }
+  await injectIntoFrames(tab.id);
+  const browser = makeBrowser(tabIdRef, testSession);
+  if (typeof browser[method] !== "function") return { ok: false, error: "Unknown tool: " + method };
+  return await browser[method](args);
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (!msg) return false;
-
-  if (msg.type === "hawki:content-ready") {
-    sendResponse({ ok: true });
-    return false;
-  }
-
-  if (msg.type === "hawki:dialog") {
-    const entry = { kind: msg.kind, detail: msg.detail, url: msg.url };
-    pendingDialogs.push(entry);
-    if (pendingDialogs.length > 20) pendingDialogs.shift();
-    emit({ kind: "dialog", ...entry });
-    sendResponse({ ok: true });
-    return false;
-  }
-
+  if (!msg || !msg.type) return false;
   if (msg.type === "hawki:start") {
     startSession(msg.goal)
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
-
   if (msg.type === "hawki:stop") {
     sendResponse(stopSession());
-    return false;
+    return true;
   }
-
   if (msg.type === "hawki:get-state") {
     sendResponse(sessionState());
-    return false;
+    return true;
   }
-
+  if (msg.type === "hawki:invoke") {
+    invokeTool(msg.method, msg.args)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
   return false;
 });
 
-// Open the options page on first install so the user can add an API key.
-chrome.runtime.onInstalled.addListener(async (details) => {
-  if (details.reason === "install") {
-    chrome.runtime.openOptionsPage();
-  }
-});
-
-// Keep the dialog policy in sync with settings changes.
-chrome.storage.onChanged.addListener((changes) => {
-  if (changes.settings) {
-    const s = { ...DEFAULT_SETTINGS, ...(changes.settings.newValue || {}) };
-    dialogPolicy = {
-      confirm: s.dialogConfirm || "accept",
-      prompt: s.dialogPrompt ?? ""
-    };
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === "hawki:dialog") {
+    pendingDialogs.push({ kind: msg.kind, detail: msg.detail, url: msg.url });
+    emit({ kind: "dialog", dialogKind: msg.kind, detail: msg.detail });
   }
 });

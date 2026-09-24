@@ -88,6 +88,69 @@ function baseDescribe(name, result) {
       return { ok: true, text: `Scrolled (y=${result.scrollY ?? "?"})` };
     case "wait":
       return { ok: true, text: `Waited ${result.waited ?? "?"}ms` };
+    case "find": {
+      const matches = result.matches || [];
+      return {
+        ok: true,
+        text: `Found ${result.count ?? matches.length} match(es): ` +
+          matches.slice(0, 6).map((m) => `${m.id} <${m.tag}> ${m.text.slice(0, 50)}`).join(" | ")
+      };
+    }
+    case "point":
+      return { ok: true, text: `Point (${result.x},${result.y}) on ${result.label || "element"}` };
+    case "mouse":
+      return { ok: true, text: `Mouse ${result.op || ""} at (${result.x ?? "?"},${result.y ?? "?"})` };
+    case "keyboard":
+      return { ok: true, text: `Keyboard ${result.op || ""} ${result.pressed || ""}` };
+    case "upload":
+      return { ok: result.ok !== false, text: `Uploaded ${(result.uploaded || []).join(", ")}` };
+    case "tabs":
+      return {
+        ok: true,
+        text: result.tabs
+          ? `Tabs: ` + result.tabs.map((t) => `${t.id}${t.active ? "*" : ""} ${String(t.title || t.url).slice(0, 40)}`).join(" | ")
+          : `Tab ${result.id ?? ""} ${result.ok ? "ok" : ""}`
+      };
+    case "cookies":
+      return {
+        ok: true,
+        text: result.cookies
+          ? `${result.cookies.length} cookie(s): ` + result.cookies.slice(0, 6).map((c) => c.name).join(", ")
+          : `Cookies ${result.removed != null ? "removed " + result.removed : "ok"}`
+      };
+    case "network":
+      return { ok: true, text: `Network ${result.routes != null ? "routes=" + result.routes : "ok"}` };
+    case "emulate":
+      return { ok: true, text: "Emulation applied." };
+    case "screenshot":
+    case "pdf":
+      return { ok: true, text: `Saved ${result.filename || "file"} (${result.bytes ?? "?"} bytes)` };
+    case "download":
+      return result.ok ? { ok: true, text: `Downloaded ${result.filename} (${result.bytes ?? "?"} bytes)` } : { ok: false, text: result.error || "Download failed." };
+    case "console":
+      return {
+        ok: true,
+        text: `${result.count ?? 0} console entr${(result.count ?? 0) === 1 ? "y" : "ies"}` +
+          (result.entries?.length ? ": " + result.entries.slice(0, 4).map((e) => `[${e.kind}] ${e.text.slice(0, 80)}`).join(" | ") : "")
+      };
+    case "dialog":
+      return { ok: true, text: `Dialog policy: confirm=${result.policy?.confirm}, prompt=${JSON.stringify(result.policy?.prompt)}` };
+    case "assert": {
+      const bad = (result.results || []).filter((r) => !r.pass);
+      return {
+        ok: result.ok !== false,
+        text: result.ok !== false ? "All assertions passed." : `Assertion failed: ` + bad.map((b) => `${b.kind}${b.value ? "=" + b.value : ""}`).join(", ")
+      };
+    }
+    case "inject":
+      return { ok: true, text: `Injected ${result.injected || "content"}` };
+    case "clipboard":
+      return { ok: result.ok !== false, text: result.text != null ? `Clipboard: ${String(result.text).slice(0, 120)}` : `Wrote ${result.wrote ?? 0} chars` };
+    case "storage":
+      return {
+        ok: result.ok !== false,
+        text: result.data ? `Storage: ${JSON.stringify(result.data).slice(0, 300)}` : `Storage ${result.value != null ? JSON.stringify(result.value) : "ok"}`
+      };
     default:
       return { ok: true, text: "Done." };
   }
@@ -245,52 +308,103 @@ export class Agent {
           result = await this.browser.navigate(args);
           break;
         case "click":
-          result = await this.browser.click(args.id);
+          result = await this.browser.click(args);
           break;
         case "dblclick":
-          result = await this.browser.dblclick(args.id);
+          result = await this.browser.dblclick(args);
           break;
         case "right_click":
-          result = await this.browser.rightClick(args.id);
+          result = await this.browser.rightClick(args);
           break;
         case "hover":
-          result = await this.browser.hover(args.id);
+          result = await this.browser.hover(args);
           break;
         case "type_text":
-          result = await this.browser.typeText(args.id, args.text, args.submit);
+          result = await this.browser.typeText(args);
           break;
         case "select_option":
-          result = await this.browser.selectOption(args.id, args.value);
+          result = await this.browser.selectOption(args);
           break;
         case "check":
-          result = await this.browser.check(args.id, args.checked);
+          result = await this.browser.check(args);
           break;
         case "focus":
-          result = await this.browser.focus(args.id);
+          result = await this.browser.focus(args);
           break;
         case "read":
-          result = await this.browser.read(args.id);
+          result = await this.browser.read(args);
           break;
         case "scroll_into_view":
-          result = await this.browser.scrollIntoView(args.id);
+          result = await this.browser.scrollIntoView(args);
           break;
         case "press_key":
-          result = await this.browser.pressKey(args.keys || args.key);
+          result = await this.browser.pressKey(args);
           break;
         case "drag":
-          result = await this.browser.drag(args.from_id, args.to_id);
+          result = await this.browser.drag(args);
           break;
         case "evaluate":
           result = await this.browser.evaluate(args.code);
           break;
         case "wait_for":
-          result = await this.browser.waitFor(args.type, args.value, args.timeout_ms);
+          result = await this.browser.waitFor(args);
           break;
         case "scroll":
-          result = await this.browser.scroll(args.direction, args.amount);
+          result = await this.browser.scroll(args);
           break;
         case "wait":
           result = await this.browser.wait(args.ms);
+          break;
+        case "find":
+          result = await this.browser.find(args);
+          break;
+        case "mouse":
+          result = await this.browser.mouse(args);
+          break;
+        case "keyboard":
+          result = await this.browser.keyboard(args);
+          break;
+        case "upload":
+          result = await this.browser.upload(args);
+          break;
+        case "tabs":
+          result = await this.browser.tabs(args);
+          break;
+        case "cookies":
+          result = await this.browser.cookies(args);
+          break;
+        case "network":
+          result = await this.browser.network(args);
+          break;
+        case "emulate":
+          result = await this.browser.emulate(args);
+          break;
+        case "screenshot":
+          result = await this.browser.screenshot(args);
+          break;
+        case "pdf":
+          result = await this.browser.pdf(args);
+          break;
+        case "download":
+          result = await this.browser.download(args);
+          break;
+        case "console":
+          result = await this.browser.console(args);
+          break;
+        case "dialog":
+          result = await this.browser.dialog(args);
+          break;
+        case "assert":
+          result = await this.browser.assert(args);
+          break;
+        case "inject":
+          result = await this.browser.inject(args);
+          break;
+        case "clipboard":
+          result = await this.browser.clipboard(args);
+          break;
+        case "storage":
+          result = await this.browser.storage(args);
           break;
         case "finish":
           result = { __stop: true, ok: true, summary: args.summary };

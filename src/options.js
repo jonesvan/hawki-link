@@ -20,6 +20,7 @@ const DEFAULTS = {
   jevConfidence: 0.3,
   temperature: 0.2,
   maxSteps: 40,
+  trustedInput: true,
   dialogConfirm: "accept",
   dialogPrompt: ""
 };
@@ -35,6 +36,7 @@ const fields = {
   jevConfidence: document.getElementById("jevConfidence"),
   maxSteps: document.getElementById("maxSteps"),
   temperature: document.getElementById("temperature"),
+  trustedInput: document.getElementById("trustedInput"),
   dialogConfirm: document.getElementById("dialogConfirm"),
   dialogPrompt: document.getElementById("dialogPrompt")
 };
@@ -64,6 +66,7 @@ async function load() {
   fields.jevConfidence.value = s.jevConfidence ?? 0.3;
   fields.maxSteps.value = s.maxSteps;
   fields.temperature.value = s.temperature;
+  fields.trustedInput.value = s.trustedInput === false ? "false" : "true";
   fields.dialogConfirm.value = s.dialogConfirm || "accept";
   fields.dialogPrompt.value = s.dialogPrompt || "";
   showProviderFields();
@@ -81,6 +84,7 @@ function read() {
     jevConfidence: clamp(Number(fields.jevConfidence.value), 0, 1, 0.3),
     maxSteps: Number(fields.maxSteps.value) || 40,
     temperature: Number(fields.temperature.value),
+    trustedInput: fields.trustedInput.value !== "false",
     dialogConfirm: fields.dialogConfirm.value || "accept",
     dialogPrompt: fields.dialogPrompt.value
   };
