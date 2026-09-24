@@ -2,7 +2,7 @@
 // Docs: https://api.deepseek.com
 
 export const DEFAULT_BASE_URL = "https://api.deepseek.com";
-export const DEFAULT_MODEL = "deepseek-chat";
+export const DEFAULT_MODEL = "deepseek-flash";
 
 export class DeepSeekError extends Error {
   constructor(message, status) {

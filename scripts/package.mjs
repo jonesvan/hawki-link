@@ -31,12 +31,12 @@ const files = INCLUDE.flatMap((rel) => {
 });
 
 function crc32(buf) {
-  let c;
   let crc = 0xffffffff;
   for (let n = 0; n < buf.length; n++) {
-    c = (crc ^ buf[n]) & 0xff;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    crc = (crc ^ c) & 0xffffffff;
+    crc ^= buf[n];
+    for (let k = 0; k < 8; k++) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
   }
   return (crc ^ 0xffffffff) >>> 0;
 }

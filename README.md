@@ -58,18 +58,20 @@ Open the extension's **Settings** (gear icon in the popup):
 | --- | --- | --- |
 | API key | — | From https://platform.deepseek.com |
 | Base URL | `https://api.deepseek.com` | Any OpenAI-compatible endpoint |
-| Model | `deepseek-chat` | See note below |
+| Model | `deepseek-flash` | DeepSeek-V4.1-Flash (default) |
 | Max steps | `25` | Hard cap on agent actions per task |
 | Temperature | `0.2` | Lower = more deterministic |
 
 ### About the model
 
-The public DeepSeek API exposes `deepseek-chat` and `deepseek-reasoner`. There is
-currently **no `deepseek-v4.1-flash` model ID** at `api.deepseek.com`, so the
-extension defaults to `deepseek-chat`. The model field is free-text (with a
-datalist of suggestions) — if you have access to a specific model such as a
-`deepseek-v4.1-flash` deployment, type its exact ID and point the Base URL at the
-matching endpoint.
+The default is **DeepSeek-V4.1-Flash**, whose API model id is `deepseek-flash`
+(`deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` are temporarily routed
+there for compatibility). See the
+[DeepSeek-V4.1-Flash announcement](https://www.deepseek.com/en/news/deepseek-v4-1-flash/).
+
+The model field is free-text, so you can enter any other id your account exposes
+(`deepseek-chat`, `deepseek-reasoner`, …) and point the Base URL at the matching
+endpoint.
 
 ## Usage
 
