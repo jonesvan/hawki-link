@@ -8,12 +8,9 @@ const el = {
   run: document.getElementById("run"),
   stop: document.getElementById("stop"),
   settings: document.getElementById("settings"),
-  model: document.getElementById("model"),
-  ask: document.getElementById("ask"),
-  askQuestion: document.getElementById("ask-question")
+  model: document.getElementById("model")
 };
 
-let awaitingUser = false;
 let running = false;
 
 function append(kind, html, step) {
@@ -48,22 +45,6 @@ function setRunning(value) {
   el.run.disabled = value;
   el.stop.disabled = !value;
   el.goal.disabled = false;
-}
-
-function showAsk(question) {
-  awaitingUser = true;
-  el.ask.classList.remove("hidden");
-  el.askQuestion.textContent = question;
-  el.goal.placeholder = "Type your answer and press Reply...";
-  el.run.textContent = "Reply";
-  el.goal.focus();
-}
-
-function clearAsk() {
-  awaitingUser = false;
-  el.ask.classList.add("hidden");
-  el.goal.placeholder = "Ask Hawki to do something on the web...";
-  el.run.textContent = "Run";
 }
 
 function renderEvent(event) {
@@ -116,10 +97,6 @@ function renderEvent(event) {
       append(cls, html, event.step);
       break;
     }
-    case "ask":
-      append("assistant", `<span class="tag">Question</span>${escapeHtml(event.text)}`, event.step);
-      showAsk(event.text);
-      break;
     case "dialog":
       append(
         "result",
@@ -127,12 +104,7 @@ function renderEvent(event) {
         event.step
       );
       break;
-    case "user-reply":
-      clearAsk();
-      append("user", `<span class="tag">You</span>${escapeHtml(event.text)}`);
-      break;
     case "finish":
-      clearAsk();
       setRunning(false);
       append("finish", `<span class="tag">Done</span>${escapeHtml(event.summary)}`);
       break;
@@ -161,15 +133,10 @@ el.composer.addEventListener("submit", async (e) => {
   const text = el.goal.value.trim();
   if (!text) return;
 
-  if (awaitingUser) {
-    const res = await chrome.runtime.sendMessage({ type: "hawki:user-reply", text });
-    if (!res.ok) append("error", escapeHtml(res.error));
-  } else {
-    el.log.innerHTML = "";
-    const res = await chrome.runtime.sendMessage({ type: "hawki:start", goal: text });
-    if (!res.ok) append("error", escapeHtml(res.error));
-    else setRunning(true);
-  }
+  el.log.innerHTML = "";
+  const res = await chrome.runtime.sendMessage({ type: "hawki:start", goal: text });
+  if (!res.ok) append("error", escapeHtml(res.error));
+  else setRunning(true);
   el.goal.value = "";
 });
 

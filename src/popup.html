@@ -18,15 +18,11 @@
       <button id="settings" class="icon-btn" title="Settings">&#9881;</button>
     </header>
 
-    <div id="ask" class="ask hidden">
-      <span class="ask-label">Needs your input</span>
-      <p id="ask-question"></p>
-    </div>
-
     <main id="log" class="log" aria-live="polite">
       <div class="empty">
-        Give the agent a goal, e.g. <em>&ldquo;Find the top 3 cited papers on
-        transformer interpretability on Google Scholar.&rdquo;</em>
+        Give the agent a goal and it runs autonomously to the end. e.g.
+        <em>&ldquo;Find the top 3 cited papers on transformer interpretability on
+        Google Scholar.&rdquo;</em>
       </div>
     </main>
 
@@ -34,7 +30,7 @@
       <textarea
         id="goal"
         rows="2"
-        placeholder="Ask Hawki to do something on the web..."
+        placeholder="Tell Hawki what to do — it won't stop to ask questions..."
       ></textarea>
       <div class="actions">
         <button type="submit" id="run" class="primary">Run</button>

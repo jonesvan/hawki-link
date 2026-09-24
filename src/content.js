@@ -10,6 +10,7 @@
 
   const ID_ATTR = "data-hawki-id";
   let idCounter = 0;
+  let currentFrameKey = "0";
 
   const INTERACTIVE_SELECTOR = [
     "a[href]",
@@ -60,7 +61,7 @@
   function assignId(el) {
     let id = el.getAttribute(ID_ATTR);
     if (!id) {
-      id = String(++idCounter);
+      id = currentFrameKey + ":" + ++idCounter;
       el.setAttribute(ID_ATTR, id);
     }
     return id;
@@ -101,8 +102,10 @@
   }
 
   function snapshot(opts = {}) {
+    if (opts.frameKey != null) currentFrameKey = String(opts.frameKey);
     const maxChars = opts.maxChars || 6000;
     return {
+      frameKey: currentFrameKey,
       url: location.href,
       title: document.title,
       text: pageText(maxChars),
@@ -174,8 +177,30 @@
     el.focus({ preventScroll: true });
 
     if (el.isContentEditable) {
-      el.textContent = text;
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text }));
+      // Rich editors (Etherpad, Google Docs, etc.) ignore direct textContent
+      // writes. Insert via execCommand so a real beforeinput/input fires and the
+      // editor's own model updates. Place the caret at the end and append.
+      el.focus({ preventScroll: true });
+      try {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } catch (_) {}
+      let inserted = false;
+      try {
+        inserted = document.execCommand("insertText", false, text);
+      } catch (_) {
+        inserted = false;
+      }
+      if (!inserted) {
+        el.textContent = (el.textContent || "") + text;
+        el.dispatchEvent(
+          new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" })
+        );
+      }
     } else {
       const setter = nativeInputValueSetter(el);
       if (setter) {

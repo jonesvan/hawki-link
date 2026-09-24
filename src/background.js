@@ -9,7 +9,7 @@ const DEFAULT_SETTINGS = {
   baseUrl: DEFAULT_BASE_URL,
   model: DEFAULT_MODEL,
   temperature: 0.2,
-  maxSteps: 25,
+  maxSteps: 40,
   dialogConfirm: "accept",
   dialogPrompt: ""
 };
@@ -114,47 +114,115 @@ async function releaseKeepalive() {
   if (contexts.length) await chrome.offscreen.closeDocument();
 }
 
-async function ensureContent(tabId) {
-  // Always (re)install the main-world dialog handlers for the current document.
+// Inject the content script and main-world dialog handlers into every frame of
+// the tab. Rich editors (e.g. Etherpad) live inside iframes, so top-frame-only
+// injection misses the actual editable area.
+async function injectIntoFrames(tabId) {
   chrome.scripting
     .executeScript({
-      target: { tabId },
+      target: { tabId, allFrames: true },
       world: "MAIN",
       func: installDialogHandlers,
       args: [dialogPolicy]
     })
+    .catch(() => []);
+
+  let results = [];
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ["src/content.js"]
+    });
+  } catch (_) {
+    // Some frames may refuse injection; fall back to the top frame.
+    results = await chrome.scripting
+      .executeScript({ target: { tabId }, files: ["src/content.js"] })
+      .catch(() => []);
+  }
+
+  chrome.scripting
+    .insertCSS({ target: { tabId, allFrames: true }, files: ["src/content.css"] })
     .catch(() => {});
 
-  try {
-    await chrome.tabs.sendMessage(tabId, {
-      source: "hawki-agent",
-      action: "snapshot",
-      args: { maxElements: 1, maxChars: 1 }
-    });
-    return;
-  } catch (_) {
-    // Not injected yet.
-  }
-  await chrome.scripting.insertCSS({
-    target: { tabId },
-    files: ["src/content.css"]
-  }).catch(() => {});
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ["src/content.js"]
-  });
+  const frameIds = results.map((r) => r.frameId).filter((id) => id != null);
+  return frameIds.length ? frameIds : [0];
 }
 
-async function sendAction(tabId, action, args = {}) {
-  await ensureContent(tabId);
-  const res = await chrome.tabs.sendMessage(tabId, {
-    source: "hawki-agent",
-    action,
-    args
-  });
-  if (!res) throw new Error("No response from page.");
+// Element ids are prefixed with their frame id ("3:12"), so we can route an
+// action back to the right frame.
+function frameOfId(id) {
+  const m = String(id ?? "").match(/^(\d+):/);
+  return m ? Number(m[1]) : null;
+}
+
+async function sendToFrame(tabId, frameId, action, args = {}) {
+  const res = await chrome.tabs.sendMessage(
+    tabId,
+    { source: "hawki-agent", action, args },
+    { frameId }
+  );
+  if (!res) throw new Error(`No response from frame ${frameId}.`);
   if (!res.ok) throw new Error(res.error || "Page action failed.");
   return res.result;
+}
+
+function mergeSnapshots(states, maxChars = 6000) {
+  const top = states.find((s) => s.frameId === 0) || states[0];
+  const elements = [];
+  for (const { frameId, state } of states) {
+    for (const el of state.elements || []) {
+      if (elements.length >= 150) break;
+      elements.push({ ...el, frame: frameId });
+    }
+  }
+  const primary = top.state.text || "";
+  const extra = states
+    .filter((s) => s.frameId !== top.frameId && s.state.text)
+    .map((s) => `[frame ${s.frameId}] ${s.state.text}`)
+    .join("\n\n");
+  let text = primary + (extra ? "\n\n" + extra : "");
+  if (text.length > maxChars + 2000) {
+    text = text.slice(0, maxChars + 2000) + "\n...[truncated]";
+  }
+  return {
+    url: top.state.url,
+    title: top.state.title,
+    text,
+    elements,
+    frames: states.map((s) => ({
+      frameId: s.frameId,
+      url: s.state.url,
+      title: s.state.title,
+      elements: (s.state.elements || []).length
+    })),
+    scrollY: top.state.scrollY,
+    scrollHeight: top.state.scrollHeight,
+    viewportHeight: top.state.viewportHeight
+  };
+}
+
+// Read every frame of the tab and merge them into one observation.
+async function snapshotAll(tabId, opts = {}) {
+  const frameIds = await injectIntoFrames(tabId);
+  const settled = await Promise.all(
+    frameIds.map((frameId) =>
+      chrome.tabs
+        .sendMessage(
+          tabId,
+          {
+            source: "hawki-agent",
+            action: "snapshot",
+            args: { ...opts, frameKey: String(frameId) }
+          },
+          { frameId }
+        )
+        .then((res) => (res && res.ok ? { frameId, state: res.result } : null))
+        .catch(() => null)
+    )
+  );
+  const states = settled.filter(Boolean);
+  if (!states.length) throw new Error("Could not read any frame on this page.");
+  return mergeSnapshots(states, opts.maxChars || 6000);
 }
 
 function waitForTabComplete(tabId, timeoutMs = 20000) {
@@ -210,23 +278,25 @@ function watchNewTab(ms) {
 // loop: every state-changing action ends by returning a fresh page snapshot.
 async function observe(tabIdRef, opts = {}) {
   await waitForTabComplete(tabIdRef.current, opts.timeout || 15000);
-  await sleep(opts.settle ?? 250);
-  return await sendAction(tabIdRef.current, "snapshot", {
+  await sleep(opts.settle ?? 150);
+  return await snapshotAll(tabIdRef.current, {
     maxChars: opts.maxChars || 3500,
     maxElements: opts.maxElements || 100
   });
 }
 
-// Run a content-script action, detect navigation / new tabs, and return the
-// resulting page state so the model always reasons over the current page.
-async function runAction(tabIdRef, action, args) {
+// Run an action in the frame that owns the target element, detect navigation /
+// new tabs, and return the resulting page state.
+async function runAction(tabIdRef, action, args, lastFrameRef) {
   const before = await tabStatus(tabIdRef.current);
-  const watcher = watchNewTab(700);
+  const watcher = watchNewTab(450);
+  const frameId = frameOfId(args && args.id) ?? (lastFrameRef ? lastFrameRef.current : 0);
+  if (lastFrameRef && frameId != null) lastFrameRef.current = frameId;
 
   let result;
   let error = null;
   try {
-    result = await sendAction(tabIdRef.current, action, args);
+    result = await sendToFrame(tabIdRef.current, frameId, action, args);
   } catch (err) {
     error = err;
   }
@@ -238,7 +308,7 @@ async function runAction(tabIdRef, action, args) {
     return attachDialogs({ ok: true, action, opened_new_tab: true, page });
   }
 
-  await sleep(250);
+  await sleep(120);
   const after = await tabStatus(tabIdRef.current);
   const navigated =
     !after || !before || after.url !== before.url || after.status === "loading";
@@ -254,10 +324,11 @@ async function runAction(tabIdRef, action, args) {
 
 function makeBrowser(tabIdRef) {
   const activeTabId = () => tabIdRef.current;
+  const lastFrameRef = { current: 0 };
 
   return {
     async getPageState(args = {}) {
-      const state = await sendAction(activeTabId(), "snapshot", {
+      const state = await snapshotAll(activeTabId(), {
         maxChars: args.max_chars || 6000,
         maxElements: 120
       });
@@ -280,29 +351,35 @@ function makeBrowser(tabIdRef) {
         if (!/^https?:\/\//i.test(url)) url = "https://" + url;
         await chrome.tabs.update(id, { url });
       }
+      lastFrameRef.current = 0;
       const page = await observe(tabIdRef, { timeout: 20000 });
       return attachDialogs({ ok: true, navigated: true, url: page.url, page });
     },
 
     async click(id) {
-      return await runAction(tabIdRef, "click", { id });
+      return await runAction(tabIdRef, "click", { id }, lastFrameRef);
     },
 
     async typeText(id, text, submit) {
-      return await runAction(tabIdRef, "type", { id, text, submit: !!submit });
+      return await runAction(tabIdRef, "type", { id, text, submit: !!submit }, lastFrameRef);
     },
 
     async selectOption(id, value) {
-      return await runAction(tabIdRef, "select", { id, value });
+      return await runAction(tabIdRef, "select", { id, value }, lastFrameRef);
     },
 
     async pressKey(key) {
-      return await runAction(tabIdRef, "pressKey", { key });
+      return await runAction(tabIdRef, "pressKey", { key }, lastFrameRef);
     },
 
     async scroll(direction, amount) {
-      const res = await sendAction(activeTabId(), "scroll", { direction, amount });
-      return attachDialogs(res);
+      const frameIds = await injectIntoFrames(activeTabId());
+      const results = await Promise.all(
+        frameIds.map((frameId) =>
+          sendToFrame(activeTabId(), frameId, "scroll", { direction, amount }).catch(() => null)
+        )
+      );
+      return attachDialogs(results.find(Boolean) || { ok: true });
     },
 
     async wait(ms) {
@@ -329,12 +406,6 @@ async function startSession(goal) {
     settings,
     browser: makeBrowser(tabIdRef),
     onLog: (entry) => emit({ kind: "log", ...entry }),
-    onAsk: (question) => {
-      emit({ kind: "ask", question });
-      return new Promise((resolve) => {
-        session.pendingAsk = resolve;
-      });
-    },
     onFinish: (summary) => {
       emit({ kind: "finish", summary });
       if (session) session.running = false;
@@ -342,7 +413,7 @@ async function startSession(goal) {
     }
   });
 
-  session = { agent, pendingAsk: null, tabId: tab.id, running: true };
+  session = { agent, tabId: tab.id, running: true };
   eventHistory.length = 0;
   try {
     await ensureKeepalive();
@@ -360,11 +431,6 @@ async function startSession(goal) {
 
 function stopSession() {
   if (!session) return { ok: false, error: "No task running." };
-  if (session.pendingAsk) {
-    const resolve = session.pendingAsk;
-    session.pendingAsk = null;
-    resolve("[The user stopped the task.]");
-  }
   session.agent.stop("Stopped by user.");
   session.running = false;
   emit({ kind: "finish", summary: "Stopped by user." });
@@ -372,21 +438,9 @@ function stopSession() {
   return { ok: true };
 }
 
-function replyToAsk(text) {
-  if (!session || !session.pendingAsk) {
-    return { ok: false, error: "The agent is not waiting for input." };
-  }
-  const resolve = session.pendingAsk;
-  session.pendingAsk = null;
-  emit({ kind: "user-reply", text });
-  resolve(text);
-  return { ok: true };
-}
-
 function sessionState() {
   return {
     running: !!(session && session.running),
-    waiting: !!(session && session.pendingAsk),
     history: eventHistory
   };
 }
@@ -417,11 +471,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === "hawki:stop") {
     sendResponse(stopSession());
-    return false;
-  }
-
-  if (msg.type === "hawki:user-reply") {
-    sendResponse(replyToAsk(msg.text));
     return false;
   }
 

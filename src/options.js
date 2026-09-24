@@ -8,7 +8,7 @@ const DEFAULTS = {
   baseUrl: DEFAULT_BASE_URL,
   model: DEFAULT_MODEL,
   temperature: 0.2,
-  maxSteps: 25,
+  maxSteps: 40,
   dialogConfirm: "accept",
   dialogPrompt: ""
 };
@@ -46,7 +46,7 @@ function read() {
     apiKey: fields.apiKey.value.trim(),
     baseUrl: fields.baseUrl.value.trim() || DEFAULT_BASE_URL,
     model: fields.model.value.trim() || DEFAULT_MODEL,
-    maxSteps: Number(fields.maxSteps.value) || 25,
+    maxSteps: Number(fields.maxSteps.value) || 40,
     temperature: Number(fields.temperature.value),
     dialogConfirm: fields.dialogConfirm.value || "accept",
     dialogPrompt: fields.dialogPrompt.value

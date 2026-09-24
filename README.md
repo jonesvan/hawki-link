@@ -6,8 +6,7 @@ reports back — driven by a DeepSeek chat model.
 
 > Examples: *"Find the 3 most cited papers on transformer interpretability on
 > Google Scholar and summarize them."* · *"Log into my email and tell me what's
-> unread."* · *"Add a large pepperoni pizza to the cart on this site — do not
-> check out without asking me."*
+> unread."* · *"Add a large pepperoni pizza to the cart on this site and check out."*
 
 ## Features
 
@@ -16,6 +15,9 @@ reports back — driven by a DeepSeek chat model.
 - **Observe → act → observe**: every state-changing action (click, type, submit,
   navigate) waits for the page to settle — including new tabs and navigation — and
   returns a fresh snapshot so the agent always reasons over the real page.
+- **All frames, rich editors**: the page is read and driven across every iframe,
+  and text is inserted into contenteditable editors (Etherpad, Docs-like) via real
+  input events, so it can write into pads, editors and embedded widgets.
 - **Loop detection**: if the agent repeats itself it is nudged to re-plan, and it
   stops cleanly rather than spinning forever.
 - **Dialog handling**: native `alert` / `confirm` / `prompt` and `window.print()`
@@ -23,9 +25,8 @@ reports back — driven by a DeepSeek chat model.
   one is reported as a step.
 - **Real browser control** via content scripts: page snapshots, clicks, typing,
   dropdown selection, key presses, scrolling, waits, navigation.
-- **Human in the loop**: the agent pauses with `ask_user` for credentials, and is
-  instructed to request approval before spending money, sending messages, or
-  deleting anything.
+- **Fully autonomous**: no confirmation prompts. You give a goal, it decides and
+  runs to completion as directly as it can.
 - **Streaming activity log** in the popup so you can watch every step.
 - API key stored locally in `chrome.storage.local`; never bundled or committed.
 
@@ -67,7 +68,7 @@ Open the extension's **Settings** (gear icon in the popup):
 | API key | — | From https://platform.deepseek.com |
 | Base URL | `https://api.deepseek.com` | Any OpenAI-compatible endpoint |
 | Model | `deepseek-flash` | DeepSeek-V4.1-Flash (default) |
-| Max steps | `25` | Hard cap on agent actions per task |
+| Max steps | `40` | Hard cap on agent actions per task |
 | Temperature | `0.2` | Lower = more deterministic |
 | confirm() policy | `accept` | `accept` or `dismiss` when a page asks for confirmation |
 | prompt() value | *(site default)* | Value returned to a page's `prompt()` |
@@ -88,8 +89,8 @@ endpoint.
 1. Open any website in the active tab.
 2. Click the Hawki Link icon.
 3. Type a goal and press **Run**.
-4. Watch the log. When the agent asks a question (e.g. for a password or approval)
-   the input box turns into a reply field — answer it and press **Reply**.
+4. Watch the log. The agent runs autonomously and shows every step — reasoning,
+   tool calls, and observations — until it prints the final result.
 5. Press **Stop** at any time to abort.
 
 ## How it works
@@ -123,6 +124,8 @@ popup.js ──hawki:start──▶ background.js ──▶ Agent (src/lib/agent
   pickers (`<input type="file">`), permission prompts, and beforeunload prompts —
   cannot be controlled by a content script and still require you.
 - It cannot solve CAPTCHAs or bypass bot protection.
+- Sandboxed inline frames or frames whose origin it can't access are skipped; the
+  rest of the page still works.
 - Very large or heavily scripted pages may exceed the snapshot text budget; the
   agent can scroll and re-read.
 

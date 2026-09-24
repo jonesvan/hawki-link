@@ -34,12 +34,17 @@ function baseDescribe(name, result) {
   const view = pageView(page);
 
   switch (name) {
-    case "get_page_state":
+    case "get_page_state": {
+      const frameNote =
+        Array.isArray(result.frames) && result.frames.length > 1
+          ? ` across ${result.frames.length} frames`
+          : "";
       return {
         ok: true,
-        text: `Read page: ${view?.title || view?.url || "(untitled)"} \u2014 ${view?.elements ?? 0} interactive elements`,
+        text: `Read page: ${view?.title || view?.url || "(untitled)"} \u2014 ${view?.elements ?? 0} interactive elements${frameNote}`,
         ...view
       };
+    }
     case "navigate":
       return { ok: true, text: `Navigated to ${result.url || view?.url || ""}`, navigated: true, ...view };
     case "click":
@@ -57,8 +62,6 @@ function baseDescribe(name, result) {
       return { ok: true, text: `Scrolled (y=${result.scrollY ?? "?"})` };
     case "wait":
       return { ok: true, text: `Waited ${result.waited ?? "?"}ms` };
-    case "ask_user":
-      return { ok: true, text: "User responded." };
     default:
       return { ok: true, text: "Done." };
   }
@@ -70,14 +73,12 @@ export class Agent {
    * @param {object} opts.settings  { apiKey, baseUrl, model, temperature, maxSteps }
    * @param {object} opts.browser   Tool implementation (see background.js).
    * @param {(entry:object)=>void} [opts.onLog]
-   * @param {(question:string)=>Promise<string>} [opts.onAsk]
    * @param {(summary:string)=>void} [opts.onFinish]
    */
-  constructor({ settings, browser, onLog, onAsk, onFinish }) {
+  constructor({ settings, browser, onLog, onFinish }) {
     this.settings = settings;
     this.browser = browser;
     this.onLog = onLog || (() => {});
-    this.onAsk = onAsk || (async () => "The user did not respond.");
     this.onFinish = onFinish || (() => {});
     this.abort = new AbortController();
     this.messages = [{ role: "system", content: SYSTEM_PROMPT }];
@@ -93,7 +94,7 @@ export class Agent {
 
   async run(goal) {
     this.messages.push({ role: "user", content: goal });
-    const maxSteps = this.settings.maxSteps || 25;
+    const maxSteps = this.settings.maxSteps || 40;
 
     for (let step = 0; step < maxSteps; step++) {
       if (this.abort.signal.aborted) {
@@ -198,8 +199,8 @@ export class Agent {
         content:
           "You are repeating the same action without progress. Stop and reassess: " +
           "call get_page_state to re-read the current page, look for a different " +
-          "element or path forward, ask_user for help, or call finish if the goal " +
-          "is complete or cannot be achieved."
+          "element or path forward, or call finish if the goal is complete or cannot " +
+          "be achieved. Do not ask the user \u2014 decide yourself."
       });
       this.onLog({ type: "thinking", text: "Loop detected \u2014 nudging the agent to re-plan." });
     }
@@ -235,12 +236,6 @@ export class Agent {
         case "wait":
           result = await this.browser.wait(args.ms);
           break;
-        case "ask_user": {
-          this.onLog({ type: "ask", text: args.question, step: this.currentStep });
-          const answer = await this.onAsk(args.question);
-          result = { ok: true, answer };
-          break;
-        }
         case "finish":
           result = { __stop: true, ok: true, summary: args.summary };
           break;
